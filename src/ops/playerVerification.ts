@@ -5,9 +5,8 @@ export const PLAYER_PACKAGE = 'net.stakeout.duomove.player';
 // Fixed read-only command, executed using the requesting workspace's provider key.
 export const PLAYER_INSPECTION_COMMAND = [
   'cat /proc/uptime', 'dumpsys location',
-  "printf '\\nDUOMOVE_PACKAGE_INFO\\n'", `dumpsys package ${PLAYER_PACKAGE}`,
-  "printf '\\nDUOMOVE_APK_SHA256\\n'", `apk="$(pm path ${PLAYER_PACKAGE})"`,
-  'case "$apk" in package:/data/app/*/base.apk) sha256sum "${apk#package:}";; *) printf "unavailable\\n";; esac',
+  'echo DUOMOVE_PACKAGE_INFO', `dumpsys package ${PLAYER_PACKAGE} | grep -e versionCode= -e versionName=`,
+  'echo DUOMOVE_APK_SHA256', `pm path ${PLAYER_PACKAGE} | cut -d: -f2- | xargs sha256sum`,
 ].join('; ');
 
 export function splitPlayerInspection(content: string) {
@@ -29,7 +28,8 @@ export function installedPlayerInfo(dump: string, checksum: string) {
   const sha256 = /^([a-f0-9]{64})\s+\S+\s*$/i.exec(checksum.trim())?.[1]?.toLowerCase();
   const versionCode = /^\s*versionCode=(\d+)\b/m.exec(dump)?.[1];
   const versionName = /^\s*versionName=([^\r\n]{1,80})/m.exec(dump)?.[1]?.trim();
-  if (!sha256 || !versionCode || !versionName) throw new Error('Installed player metadata was incomplete');
+  if (!sha256) throw new Error('Installed APK checksum was unavailable');
+  if (!versionCode || !versionName) throw new Error('Installed player version was unavailable');
   return { packageName: PLAYER_PACKAGE, versionCode: Number(versionCode), versionName, sha256,
     matchesUploadedApk: sha256 === UPLOADED_PLAYER_SHA256 };
 }

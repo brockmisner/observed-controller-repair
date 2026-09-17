@@ -256,9 +256,15 @@ export async function inspectDevicePlayerApk(imageId: string, tenantId: string) 
   let startedAt = 0;
   const response = await post<unknown>('/api/v1/cloudPhone/command', { image_id: imageId, command: PLAYER_INSPECTION_COMMAND }, tenantId,
     async () => { startedAt = Date.now(); }, true);
+  const content = readPhoneCommandContent(response);
   let result: ReturnType<typeof splitPlayerInspection>;
-  try { result = splitPlayerInspection(readPhoneCommandContent(response)); }
-  catch { throw new HttpError(502, 'DuoPlus could not read the installed player APK identity'); }
+  try { result = splitPlayerInspection(content); }
+  catch (error) {
+    const reason = error instanceof Error && [
+      'Player inspection output was incomplete', 'Installed APK checksum was unavailable', 'Installed player version was unavailable',
+    ].includes(error.message) ? error.message : 'DuoPlus could not read the installed player APK identity';
+    throw new HttpError(502, reason);
+  }
   return { checkedAt: new Date().toISOString(), readOnly: true, installed: result.installed, player: null,
     observation: readPhoneLocation(result.location, new Date(), Date.now() - startedAt),
     verificationSource: 'DUOPLUS_WORKSPACE_COMMAND',
