@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { PlayerSocket } from './playerProtocol.js';
 import { logger } from '../logger.js';
+import { readPhoneLocation, PHONE_LOCATION_COMMAND } from '../api/phoneNavigation.js';
 const exec = promisify(execFile);
 const pkg = 'net.stakeout.duomove.player';
 export const playerImage = () => process.env.DUOMOVE_IMAGE_ID || '';
@@ -15,8 +16,8 @@ function endpoint() {
   if (extra || isIP(host!) !== 4 || !/^\d+$/.test(port || '') || +port! < 1 || +port! > 65535) throw new Error('Player ADB endpoint is invalid');
   return value;
 }
-async function adb(args: string[]) {
-  try { return (await exec('adb', args, { timeout: 12000, maxBuffer: 65536 })).stdout.trim(); }
+async function adb(args: string[], timeout = 12000) {
+  try { return (await exec('adb', args, { timeout, maxBuffer: 65536 })).stdout.trim(); }
   catch { throw new Error('Player ADB command failed; check the phone connection'); }
 }
 const tokenPath = () => `${process.env.DUOMOVE_STATE_DIR || '/app/data'}/duomove-control-token`;
@@ -70,4 +71,10 @@ export async function initializePlayer(): Promise<void> {
   } catch (error) {
     logger.warn({ event: 'duomove_setup', imageId: playerImage(), state: 'FAILED', reason: error instanceof Error ? error.message : 'Setup failed' }, 'DuoMove setup requires attention');
   }
+}
+
+export async function observePlayerPhone() {
+  const startedAt = Date.now();
+  const content = await adb(['-s', endpoint(), 'shell', PHONE_LOCATION_COMMAND], 2500);
+  return readPhoneLocation(content, new Date(), Date.now() - startedAt);
 }

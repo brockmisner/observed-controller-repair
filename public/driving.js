@@ -49,7 +49,7 @@
     const telemetry = trip?.latestRequested || trip?.locationTelemetry;
     const accepted = trip?.latestAccepted || (telemetry?.status === "API_ACCEPTED" ? telemetry : null);
     const observed = trip?.androidObservation || telemetry?.androidObservation;
-    const readback = trip?.phoneSync?.gps?.observation;
+    const readback = trip?.phoneSync?.player?.phoneObservation || trip?.phoneSync?.gps?.observation;
     const runtimePoint = point(readback?.point);
     const useReadback = runtimePoint && (!point(observed) || Date.parse(readback.checkedAt) >= Date.parse(observed.capturedAt));
     return {
@@ -219,7 +219,7 @@
       const mapsLabel = !sync?.enabled ? "Not requested" : ({ PENDING: "Waiting to open Maps", OPENING: "Opening Maps", LAUNCH_ACCEPTED: "Maps launch accepted", FAILED: "Maps launch failed", UNKNOWN: "Maps launch unconfirmed" })[maps?.status] || "Maps launch unconfirmed";
       let gpsLabel = ({ PENDING: "Phone GPS check pending", MATCH: "Phone GPS matches checked request", WAITING: "Waiting for phone GPS match", UNAVAILABLE: "Phone GPS readback unavailable" })[gps?.status] || (sync?.enabled ? "Phone GPS check pending" : "Not requested");
       const player = sync?.player;
-      if (player) gpsLabel = `DuoMove ${player.status?.state || "connecting"} · Applied ${player.status?.applied_seq ?? "—"} · Framework ${player.status?.framework_observed_seq ?? "—"} · Fused ${player.status?.fused_observed_seq ?? "—"} (player readback)`;
+      if (player) gpsLabel = `DuoMove ${player.status?.state || "connecting"} · Applied ${player.status?.applied_seq ?? "—"} · Framework ${player.status?.framework_observed_seq ?? "—"} · Fused ${player.status?.fused_observed_seq >= 0 ? player.status.fused_observed_seq : "not confirmed"} (player readback)`;
       for (const [id, label, state] of [["drivingMapsStatus", mapsLabel, maps], ["drivingGpsStatus", gpsLabel, gps]]) {
         html(id, `${escape(label)}${state?.reason ? `<span class="meta">${escape(state.reason)}</span>` : ""}${state?.checkedAt ? `<span class="meta">Checked ${escape(timestamp(state.checkedAt))}</span>` : ""}`);
         $(id)?.classList.toggle("error", state?.status === "FAILED");

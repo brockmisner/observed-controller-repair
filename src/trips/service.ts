@@ -139,7 +139,7 @@ async function serializeTrip(row: DrivingTrip) {
   const route = routeFrom(row);
   const alternatives = alternativesFrom(row);
   return {
-    ...publicRow, playbackMode: usesPlayer(row.imageId) ? "DEVICE_PLAYER" : "REST_CHECKPOINTS", route, alternatives, routeIndex: Math.max(0, alternatives.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(route))), options: optionsFrom(row),
+    ...publicRow, playbackMode: jsonObject(phoneSyncJson)?.transport === "DEVICE_PLAYER" || jsonObject(phoneSyncJson)?.player ? "DEVICE_PLAYER" : "REST_CHECKPOINTS", route, alternatives, routeIndex: Math.max(0, alternatives.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(route))), options: optionsFrom(row),
     baseline: jsonObject(baselineJson), arrivalWifi: jsonObject(arrivalWifiJson) ?? { enabled: false, status: "DISABLED", error: null },
     phoneSync: jsonObject(phoneSyncJson) ?? { enabled: false },
     arrivalRpa: null, totalDurationMs: row.durationMs,
@@ -207,7 +207,7 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
           status: "PREVIEW", routeJson: JSON.stringify(route), alternativesJson: JSON.stringify(routes),
           optionsJson: JSON.stringify(timeline.options), originLat: origin.lat, originLng: origin.lng,
           durationMs: timeline.durationMs, arrivalWifiJson: JSON.stringify(arrivalWifi),
-          phoneSyncJson: JSON.stringify({ enabled: input.openMaps, maps: { status: input.openMaps ? "PENDING" : "DISABLED" } }),
+          phoneSyncJson: JSON.stringify({ transport: usesPlayer(current.imageId) ? "DEVICE_PLAYER" : "REST_CHECKPOINTS", enabled: input.openMaps, maps: { status: input.openMaps ? "PENDING" : "DISABLED" } }),
           ...(context ? { idempotencyKey: context.idempotencyKey, requestHash: context.requestHash } : {}),
         } });
       });

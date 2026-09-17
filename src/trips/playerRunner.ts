@@ -4,14 +4,14 @@ import { prisma } from '../db.js';
 import { HttpError } from '../http/errors.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
-import { withPlayer, usesPlayer } from './playerConnection.js';
+import { withPlayer, usesPlayer, observePlayerPhone } from './playerConnection.js';
 import { terminal, type PlayerStatus } from './playerProtocol.js';
 import { buildPlayerPlan } from './playerPlan.js';
 import type { TripLease } from './lease.js';
 import { ensureTripMaps } from './phoneSync.js';
 interface PlayerState {
   sessionId: string; offsetMs: number; instanceId?: string; started?: boolean;
-  checkedAt?: string; status?: PlayerStatus;
+  checkedAt?: string; status?: PlayerStatus; observedSeq?: number; phoneObservation?: Awaited<ReturnType<typeof observePlayerPhone>>;
 }
 export function playerState(trip: DrivingTrip): PlayerState | undefined {
   return JSON.parse(trip.phoneSyncJson || '{}').player;
@@ -124,6 +124,9 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
       matched(s, player); return s;
     });
     player.status = status; player.checkedAt = new Date().toISOString();
+    if (status.applied_seq >= 2 && status.applied_seq - (player.observedSeq ?? -100) >= 10) {
+      try { player.phoneObservation = await observePlayerPhone(); player.observedSeq = status.applied_seq; } catch { /* Player acknowledgments remain distinct from readback. */ }
+    }
     await recordProgress(trip, player);
     if (status.state === 'COMPLETED' && status.cleanup_ok) {
       await prisma.$transaction(async tx => {
@@ -136,6 +139,7 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
     } });
     logger.info({ event: 'duomove_progress', tripId: trip.id, imageId: trip.imageId, state: status.state,
       appliedSeq: status.applied_seq, frameworkSeq: status.framework_observed_seq, fusedSeq: status.fused_observed_seq,
+      delivery: status.delivery, mismatches: status.observer_mismatches, phoneObservation: player.phoneObservation,
       skipped: status.skipped_samples, latenessMs: status.max_lateness_ms, cleanupOk: status.cleanup_ok }, 'Player acknowledgment');
   } catch (error) {
     // No further heartbeats after failure. Cancel if reachable; retain ownership either way.
