@@ -48,6 +48,8 @@ import { haversineMeters } from "../geo/haversine.js";
 import { checkPhoneLocation } from "../ops/phoneLocationCheck.js";
 import { inventoryImportBackoff } from "../orchestrator/importBackoff.js";
 import { listLegacyRpaJobs, resolveLegacyRpaJob } from "../queue/rpaLifecycle.js";
+import { inspectPlayerPhone, playerImage, usesPlayer } from "../trips/playerConnection.js";
+import { verifyPlayer } from "../ops/playerVerification.js";
 
 const latitude = z.number().finite().min(-90).max(90);
 const longitude = z.number().finite().min(-180).max(180);
@@ -140,6 +142,7 @@ async function snapshot(tenantId?: string) {
   ]);
   const devices = await Promise.all(deviceRows.map(async ({ environment, locationRequests, drivingTrips, ...device }) => ({
     ...device,
+    playerVerificationSupported: usesPlayer(device.imageId),
     environment: environmentView(environment, device),
     locationTelemetry: locationRequests[0] ? serializeLocationRequest(locationRequests[0]) : null,
     trip: drivingTrips[0] ? await getTrip(device.tenantId, drivingTrips[0].id) : null,
@@ -519,6 +522,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         getDevice: (id, tenantId) => prisma.device.findFirst({ where: { id, tenantId } }),
         observe: observeDeviceLocation, powerMaxAgeMs: config.powerStatusMaxAgeMs,
       }));
+      send(res, 200, result);
+      return;
+    }
+
+    if (method === "POST" && /^\/devices\/[^/]+\/player\/verify$/.test(path)) {
+      if (!tenantId) throw new HttpError(401, "Workspace required");
+      z.object({}).strict().parse(await readJson(req));
+      const result = await verifyPlayer(scopedDevice!.id, tenantId, {
+        getDevice: (id, tenantId) => prisma.device.findFirst({ where: { id, tenantId } }),
+        otherTenantHasImage: async (imageId, tenantId) => Boolean(await prisma.device.count({ where: { imageId, tenantId: { not: tenantId } } })),
+        configuredImage: playerImage, inspect: inspectPlayerPhone,
+      });
       send(res, 200, result);
       return;
     }

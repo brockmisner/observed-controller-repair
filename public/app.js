@@ -2,6 +2,7 @@ const state = {
   snapshot: null,
   selectedId: null,
   markers: new Map(),
+  phoneMarkers: new Map(),
   circles: new Map(),
   trails: new Map(),
   routes: new Map(),
@@ -216,7 +217,7 @@ function clearWorkspace() {
   state.selectedId = null;
   state.walkDest = null;
   state.playIndex = null;
-  for (const bucket of [state.markers, state.circles, state.trails, state.routes, state.anchors, state.heat]) {
+  for (const bucket of [state.markers, state.phoneMarkers, state.circles, state.trails, state.routes, state.anchors, state.heat]) {
     for (const layer of bucket.values()) map.removeLayer(layer);
     bucket.clear();
   }
@@ -669,6 +670,7 @@ function renderDetail() {
     <div class="section-heading"><h3>Android location check</h3><button type="button" class="btn ghost" id="checkPhoneLocation">Check phone GPS</button></div>
     <div id="phoneLocationFeedback" class="form-message" role="status" aria-live="polite"></div>
     <div class="meta">Reads Android's last location. Open Maps on the phone to request a fresh fix. This check does not move the phone.</div>
+    ${d.playerVerificationSupported ? '<div class="section-heading"><h3>Installed player</h3><button type="button" class="btn ghost" id="verifyPlayer">Verify player APK</button></div><div id="playerVerificationFeedback" class="form-message" role="status" aria-live="polite"></div>' : ''}
     <div class="section-heading"><h3>Controller coordinates</h3>${statusHtml(location)}</div>
     <div class="metrics">
       <div class="metric"><span>Model latitude</span><b>${fmt(d.currentLat, 6)}</b></div>
@@ -718,6 +720,11 @@ function updateCopyStatus(device) {
   $("checkPowerNow").disabled = Boolean(operation.powerPending);
   $("checkPowerNow").setAttribute("aria-busy", String(Boolean(operation.powerPending)));
   $("checkPowerNow").innerHTML = icon(operation.powerPending ? "loader-circle" : "refresh-cw");
+  if ($("verifyPlayer")) {
+    $("verifyPlayer").disabled = Boolean(operation.playerPending);
+    $("verifyPlayer").setAttribute("aria-busy", String(Boolean(operation.playerPending)));
+    formMessage("playerVerificationFeedback", operation.playerPending ? "Reading installed APK and player status..." : operation.playerMessage || "No player verification performed in this session.", Boolean(operation.playerError));
+  }
   $("checkPhoneLocation").disabled = Boolean(operation.gpsPending || device.activeTripId);
   $("checkPhoneLocation").setAttribute("aria-busy", String(Boolean(operation.gpsPending)));
   formMessage("phoneLocationFeedback", operation.gpsPending ? "Reading Android location..." :
@@ -742,6 +749,7 @@ async function checkPhoneLocation(device) {
     const fix = result.observation;
     if (result.deviceId !== device.id || !fix || !["OBSERVED", "UNKNOWN"].includes(fix.state) || typeof fix.reason !== "string" ||
         !Number.isFinite(Date.parse(fix.checkedAt))) throw new Error("The phone returned an invalid location check.");
+    operation.phoneReadback = { deviceId: device.id, imageId: device.imageId, observation: fix };
     operation.gpsError = fix.state !== "OBSERVED";
     operation.gpsMessage = `Checked ${new Date(fix.checkedAt).toLocaleString()}. ${fix.reason}`;
     if (fix.state === "OBSERVED" && fix.point) {
@@ -753,6 +761,36 @@ async function checkPhoneLocation(device) {
     if (sessionVersion === state.sessionVersion) {
       operation.gpsPending = false;
       if (selectedDevice()?.id === device.id) renderDetail();
+      if (state.snapshot) renderMap(state.snapshot);
+    }
+  }
+}
+
+async function verifyPlayer(device) {
+  const operation = movementOperation(device);
+  if (operation.playerPending) return;
+  const sessionVersion = state.sessionVersion;
+  operation.playerPending = true;
+  operation.playerError = false;
+  updateCopyStatus(device);
+  try {
+    const result = await api(`/devices/${encodeURIComponent(device.id)}/player/verify`, { method: "POST", body: JSON.stringify({}) });
+    if (sessionVersion !== state.sessionVersion) return;
+    if (result.deviceId !== device.id || result.imageId !== device.imageId || result.readOnly !== true || !result.player?.connected) throw new Error("Player inspection returned an invalid identity.");
+    operation.phoneReadback = { deviceId: device.id, imageId: device.imageId, observation: result.observation };
+    const installed = result.installed;
+    operation.playerError = !installed || !installed.matchesUploadedApk;
+    operation.playerMessage = `Checked ${new Date(result.checkedAt).toLocaleString()}. ` +
+      (installed ? `${installed.packageName} ${installed.versionName}: ${installed.matchesUploadedApk ? "SHA-256 matches your uploaded APK" : "SHA-256 differs from your uploaded APK"}. ` : "Installed APK could not be identified. ") +
+      `Player ${result.player.state}; cleanup ${result.player.cleanupOk ? "confirmed" : "unconfirmed"}. ` +
+      `${result.observation?.reason || result.locationError || "Location unavailable."} Wi-Fi, cell and Bluetooth were not observed.`;
+  } catch (error) {
+    if (sessionVersion === state.sessionVersion) { operation.playerMessage = error.message; operation.playerError = true; operation.phoneReadback = null; }
+  } finally {
+    if (sessionVersion === state.sessionVersion) {
+      operation.playerPending = false;
+      if (selectedDevice()?.id === device.id) renderDetail();
+      if (state.snapshot) renderMap(state.snapshot);
     }
   }
 }
@@ -1640,7 +1678,7 @@ function renderMap(snap) {
   for (const d of snap.devices) {
     const isOn = window.ObservatoryStatus?.isFreshOn?.(d, statusContext()) || false;
     if (state.onOnly && !isOn && d.id !== state.selectedId) {
-      for (const bucket of [state.markers, state.circles, state.trails, state.routes, state.anchors, state.heat]) {
+      for (const bucket of [state.markers, state.phoneMarkers, state.circles, state.trails, state.routes, state.anchors, state.heat]) {
         if (bucket.has(d.id)) {
           map.removeLayer(bucket.get(d.id));
           bucket.delete(d.id);
@@ -1654,6 +1692,17 @@ function renderMap(snap) {
     if (!point || !anchor) continue;
     seen.add(d.id);
     const prominent = isOn || d.id === state.selectedId;
+    const phonePoint = window.ObservatoryPhoneReadback.freshPoint(d, state.controlOperations.get(d.id)?.phoneReadback);
+    if (phonePoint) {
+      upsertLayer(state.phoneMarkers, d.id,
+        () => L.circleMarker([phonePoint.lat, phonePoint.lng], { radius: 10, color: "#8050c7", weight: 3, fillOpacity: 0.15 }),
+        marker => {
+          marker.setLatLng([phonePoint.lat, phonePoint.lng]);
+          marker.bindPopup(`${escapeHtml(d.name || d.imageId)}<br/>Android readback (${escapeHtml(phonePoint.provider)})<br/>${fmt(phonePoint.lat, 6)}, ${fmt(phonePoint.lng, 6)}<br/>Mock: ${phonePoint.mock === null ? "unknown" : phonePoint.mock ? "yes" : "no"}<br/>Checked ${escapeHtml(new Date(phonePoint.checkedAt).toLocaleString())}`);
+        });
+    } else if (state.phoneMarkers.has(d.id)) {
+      map.removeLayer(state.phoneMarkers.get(d.id)); state.phoneMarkers.delete(d.id);
+    }
     upsertLayer(
       state.markers,
       d.id,
@@ -1773,7 +1822,7 @@ function renderMap(snap) {
     }
   }
 
-  for (const bucket of [state.markers, state.circles, state.trails, state.routes, state.anchors, state.heat]) {
+  for (const bucket of [state.markers, state.phoneMarkers, state.circles, state.trails, state.routes, state.anchors, state.heat]) {
     for (const [id, layer] of bucket) {
       if (!seen.has(id)) {
         map.removeLayer(layer);
@@ -1976,6 +2025,7 @@ $("detail").addEventListener("click", async (e) => {
   }
   if (e.target.closest("#copyDeviceSnapshot")) { const device = selectedDevice(); if (device) await copyDeviceSnapshot(device); return; }
   if (e.target.closest("#checkPowerNow")) { const device = selectedDevice(); if (device) await checkPowerNow(device); return; }
+  if (e.target.closest("#verifyPlayer")) { const device = selectedDevice(); if (device) await verifyPlayer(device); return; }
   if (e.target.closest("#checkPhoneLocation")) { const device = selectedDevice(); if (device) await checkPhoneLocation(device); return; }
   const tab = e.target.closest("[data-inspector-tab]");
   if (tab) { setInspectorTab(tab.dataset.inspectorTab); return; }
@@ -2398,6 +2448,12 @@ document.addEventListener("visibilitychange", refreshVisibleWorkspace);
 document.addEventListener("workspacechange", refreshVisibleWorkspace);
 setInterval(() => {
   renderConnection();
+  for (const [id, marker] of state.phoneMarkers) {
+    const device = state.snapshot?.devices.find(d => d.id === id);
+    if (!window.ObservatoryPhoneReadback.freshPoint(device, state.controlOperations.get(id)?.phoneReadback)) {
+      map.removeLayer(marker); state.phoneMarkers.delete(id);
+    }
+  }
   if (state.snapshot && state.snapshotAt && Date.now() - state.snapshotAt > 15_000 && !state.staleRendered) {
     state.staleRendered = true;
     renderFleet(state.snapshot);
