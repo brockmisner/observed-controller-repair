@@ -51,6 +51,8 @@
       <div class="rail-head">
         <div class="section-heading"><h2>Fleet</h2><span class="meta" id="fleetCount"></span></div>
         <label class="search-field"><span class="icon" style="--icon:url('/icons/search.svg')" aria-hidden="true"></span><input id="fleetFilter" placeholder="Search devices" aria-label="Search devices" autocomplete="off" /></label>
+        <label class="filter-field"><span>DuoPlus folder</span><select id="fleetFolder" aria-label="DuoPlus folder"><option value="all">All folders</option></select></label>
+        <div id="fleetFolderSummary" class="meta" role="status"></div>
         <label class="filter-field"><span class="sr-only">Fleet status</span><select id="fleetStatus"><option value="all">All devices</option><option value="on">ON devices</option><option value="attention">Needs attention</option><option value="pending">Pending setup</option></select></label>
       </div>
       <div id="fleetList" class="fleet-list"><div class="empty">Loading workspace...</div></div>

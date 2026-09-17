@@ -326,3 +326,7 @@ export async function triggerRpaTask(
     ],
   }, opts?.tenantId, opts?.beforeSend, opts?.requireAcceptance ?? false);
 }
+
+export async function listCloudPhoneGroups(page: number, tenantId: string): Promise<unknown> {
+  return post('/api/v1/cloudPhone/groupList', { page }, tenantId);
+}

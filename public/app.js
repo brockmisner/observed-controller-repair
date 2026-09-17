@@ -332,29 +332,42 @@ function renderFleet(snap) {
   const q = $("fleetFilter").value.trim().toLowerCase();
   const filter = $("fleetStatus")?.value || "all";
   const registeredImages = new Set(snap.devices.map((device) => device.imageId));
+  const inventory = snap.folderInventory;
+  const folderSelect = $("fleetFolder");
+  const selectedFolder = folderSelect?.value || "all";
+  const members = new Map((inventory?.phones || []).map(p => [p.imageId, p]));
+  const folderOptions = '<option value="all">All folders</option>' + (inventory?.folders || []).map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.name)} (${inventory.phones.filter(p => p.groups?.some(g => g.id === f.id)).length})</option>`).join("") + '<option value="ungrouped">Ungrouped</option><option value="unknown">Folder unknown</option>';
+  if (folderSelect && folderSelect.innerHTML !== folderOptions) { folderSelect.innerHTML = folderOptions; folderSelect.value = selectedFolder; if (!folderSelect.value) folderSelect.value = "all"; }
+  const folder = folderSelect?.value || "all";
+  const inFolder = d => { const groups = members.get(d.imageId)?.groups; return folder === "all" || folder === "unknown" && groups == null || folder === "ungrouped" && Array.isArray(groups) && !groups.length || groups?.some(g => g.id === folder); };
+  const folderLabel = d => { const groups = members.get(d.imageId)?.groups; return groups == null ? "Folder unknown" : groups.length ? groups.map(g => g.name).join(" · ") : "Ungrouped"; };
+  if ($("fleetFolderSummary")) $("fleetFolderSummary").textContent = inventory ? `${inventory.folders.length} folders · ${inventory.phones.length} inventory phones · ${snap.devices.length} registered · Synced ${age(inventory.checkedAt)}` : "Waiting for DuoPlus folder sync";
+
   const syncedAt = new Date(snap.health.lastFleetSyncAt).getTime();
   const powerAgeLimit = window.ObservatoryStatus?.powerMaxAgeMs?.(statusContext()) || 75_000;
   const inventoryFresh = !state.connectionError && state.snapshotAt && Date.now() - state.snapshotAt <= 15_000 && Number.isFinite(syncedAt) && Date.now() >= syncedAt && Date.now() - syncedAt <= powerAgeLimit;
-  const pendingHtml = discoveredOnDevices(snap)
+  const pendingHtml = (inventory?.phones || discoveredOnDevices(snap))
+    .filter(inFolder)
     .filter((device) => !registeredImages.has(device.imageId))
     .filter(() => filter !== "attention")
-    .filter(() => filter !== "on" || inventoryFresh)
+    .filter(device => filter !== "on" || inventoryFresh && device.status === 1)
     .filter((device) => !q || `${device.name || ""} ${device.imageId}`.toLowerCase().includes(q))
     .map((device) => `
       <div class="fleet-item">
         <div class="row">
           <strong>${escapeHtml(device.name || device.imageId)}</strong>
-          <span class="status-chip neutral">Pending setup</span>
+          <span class="status-chip neutral">${({1:"ON · Not registered",2:"OFF · Not registered",3:"Expired",4:"Renewal overdue"})[device.status] || "Inventory only"}</span>
         </div>
-        <small>${escapeHtml(device.imageId)}</small>
+        <small>${escapeHtml(device.imageId)} · ${escapeHtml(folderLabel(device))}</small>
         <div class="row">
-          <small>Last inventory reported ON</small>
-          <button type="button" class="btn ghost tiny" data-register-image="${escapeHtml(device.imageId)}" aria-label="Register ${escapeHtml(device.name || device.imageId)}">Register</button>
+          <small>Not registered with Observatory</small>
+          ${device.status === 1 ? `<button type="button" class="btn ghost tiny" data-register-image="${escapeHtml(device.imageId)}" aria-label="Register ${escapeHtml(device.name || device.imageId)}">Register</button>` : ""}
         </div>
       </div>
     `)
     .join("");
   const html = snap.devices
+    .filter(inFolder)
     .filter((d) => filter !== "pending")
     .filter((d) => filter !== "on" || window.ObservatoryStatus?.isFreshOn?.(d, statusContext()))
     .filter((d) => filter !== "attention" || window.ObservatoryStatus?.attention?.(d, statusContext()))
@@ -366,7 +379,7 @@ function renderFleet(snap) {
           ${statusHtml(deviceStatus("activity", d))}
           ${d.active === false && deviceStatus("activity", d).code !== "trip_paused" ? '<span class="status-chip neutral">Paused</span>' : ""}
         </div>
-        <small>${escapeHtml(d.imageId)}</small>
+        <small>${escapeHtml(d.imageId)} · ${escapeHtml(folderLabel(d))}</small>
         <div class="fleet-subline">${statusHtml(deviceStatus("wifi", d))}<small>Checked ${age(d.lastPowerSyncAt)}</small></div>
       </button>
     `)
@@ -1822,6 +1835,7 @@ $("fleetList").addEventListener("click", (e) => {
 $("fleetFilter").addEventListener("input", () => {
   if (state.snapshot) renderFleet(state.snapshot);
 });
+$("fleetFolder")?.addEventListener("change", () => { if (state.snapshot) renderFleet(state.snapshot); });
 $("fleetStatus")?.addEventListener("change", () => { if (state.snapshot) renderFleet(state.snapshot); });
 $("mobileNav")?.addEventListener("click", (e) => { const button = e.target.closest("[data-mobile-view]"); if (button) setMobileView(button.dataset.mobileView); });
 

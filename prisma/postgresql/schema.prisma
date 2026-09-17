@@ -13,6 +13,7 @@ datasource db {
 }
 
 model Tenant {
+  folderInventory DuoPlusFolderInventory?
   id        String      @id
   name      String
   createdAt DateTime    @default(now())
@@ -427,3 +428,10 @@ model SiteResult {
   createdAt      DateTime @default(now())
 }
 
+
+model DuoPlusFolderInventory {
+  tenantId String @id
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payloadJson String
+  syncedAt DateTime
+}

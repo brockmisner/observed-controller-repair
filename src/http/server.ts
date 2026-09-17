@@ -1,3 +1,4 @@
+import { savedFolders } from "../orchestrator/folders.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -104,6 +105,7 @@ export function startHttpServer(): ReturnType<typeof createServer> {
 
 async function snapshot(tenantId?: string) {
   const runtime = getFleetRuntime(tenantId);
+  const folderInventory = await savedFolders(tenantId);
   const deviceWhere = tenantId ? { tenantId } : {};
   const [deviceRows, keys, rpa, tickRows, activeDevices, poweredOn] = await Promise.all([
     prisma.device.findMany({ where: deviceWhere, orderBy: { updatedAt: "desc" }, include: {
@@ -170,6 +172,7 @@ async function snapshot(tenantId?: string) {
       darkHoursToday: Number((runtime.darkMsToday / 3_600_000).toFixed(2)),
     },
     devices,
+    folderInventory,
     discoveredDevices: runtime.onlineDevices,
     keys,
     rpa,

@@ -1,3 +1,4 @@
+import { syncFolders } from "./folders.js";
 import { listCloudPhones } from "../api/duoPlusClient.js";
 import { tenantKeyCount } from "../api/tenantKeys.js";
 import { config } from "../config.js";
@@ -186,6 +187,7 @@ function syncTenantOnce(tenantId?: string): Promise<SyncResult> {
 async function syncPowerStateForTenant(tenantId?: string): Promise<{ poweredOn: number; tracked: number }> {
   const scanStartedAt = new Date();
   const remote = await fetchAllCloudPhones(tenantId);
+  if (tenantId) await syncFolders(tenantId, remote).catch(() => logger.warn({ tenantId }, "Folder sync failed; saved inventory retained"));
   const byId = new Map<string, CloudPhoneRow>();
   for (const row of remote) {
     const id = row.id ?? row.image_id;
