@@ -251,22 +251,23 @@ export async function inspectDevicePlayerApk(imageId: string, tenantId: string) 
   if (config.dryRun) throw new HttpError(409, 'Player inspection is disabled in dry-run mode');
   validateImageId(imageId);
   if (!tenantId?.trim()) throw new HttpError(401, 'Workspace required');
-  const { PLAYER_INSPECTION_COMMAND, splitPlayerInspection } = await import('../ops/playerVerification.js');
-  const { readPhoneCommandContent, readPhoneLocation } = await import('./phoneNavigation.js');
-  let startedAt = 0;
-  const response = await post<unknown>('/api/v1/cloudPhone/command', { image_id: imageId, command: PLAYER_INSPECTION_COMMAND }, tenantId,
-    async () => { startedAt = Date.now(); }, true);
-  const content = readPhoneCommandContent(response);
-  let result: ReturnType<typeof splitPlayerInspection>;
-  try { result = splitPlayerInspection(content); }
+  const { inspectPlayerPackage } = await import('../ops/playerVerification.js');
+  const { readPhoneCommandContent } = await import('./phoneNavigation.js');
+  let installed: Awaited<ReturnType<typeof inspectPlayerPackage>>;
+  try {
+    installed = await inspectPlayerPackage(async command => readPhoneCommandContent(await post<unknown>(
+      '/api/v1/cloudPhone/command', { image_id: imageId, command }, tenantId, undefined, true)));
+  }
   catch (error) {
+    if (error instanceof HttpError || error instanceof KeyDeadError || error instanceof RateLimitError) throw error;
     const reason = error instanceof Error && [
-      'Player inspection output was incomplete', 'Installed APK checksum was unavailable', 'Installed player version was unavailable',
+      'Installed player APK path was not recognized', 'Installed APK checksum was unavailable', 'Installed player version was unavailable',
     ].includes(error.message) ? error.message : 'DuoPlus could not read the installed player APK identity';
     throw new HttpError(502, reason);
   }
-  return { checkedAt: new Date().toISOString(), readOnly: true, installed: result.installed, player: null,
-    observation: readPhoneLocation(result.location, new Date(), Date.now() - startedAt),
+  const observation = await observeDeviceLocation(imageId, tenantId).catch(() => null);
+  return { checkedAt: new Date().toISOString(), readOnly: true, installed, player: null, observation,
+    locationError: observation ? null : 'Android location readback was unavailable',
     verificationSource: 'DUOPLUS_WORKSPACE_COMMAND',
     radios: { wifi: 'NOT_OBSERVED', cell: 'NOT_OBSERVED', bluetooth: 'NOT_OBSERVED' } };
 }
