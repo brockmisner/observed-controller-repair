@@ -8,7 +8,11 @@ import { carrierByName, randomUsCellIds } from "../env/carriers.js";
 import { simIdentifiers } from "../env/sim.js";
 import { resolveWigleCell, resolveWigleCluster, wigleConfigured, type WigleCluster } from "../env/wigle.js";
 import { logger } from "../logger.js";
-import { enqueueRpa } from "../queue/producer.js";
+import { deliverSavedRpaIntent } from "../queue/rpaOutbox.js";
+import { pendingRpaStatuses } from "../queue/rpaDelivery.js";
+import { assertNoPendingRpa } from "../queue/rpaOwnership.js";
+import { withTripLease } from "../trips/lease.js";
+import { siteIssueAt } from "../sites/readiness.js";
 import type { LatLng, TransitMode } from "../types.js";
 import { HttpError } from "../http/errors.js";
 import { withEnvironmentWindow } from "./deviceOperations.js";
@@ -331,26 +335,58 @@ export async function queueSearch(
   variables: Record<string, unknown>,
   name = "local-search",
   tenantId?: string,
-): Promise<void> {
+  idempotencyKey?: string,
+): Promise<{ queued: true; jobId: string; delivery: "queued" | "pending" | "settled"; message: string }> {
   const device = await findDevice(imageId, tenantId);
-  if (await prisma.site.count({ where: { deviceId: device.id } })) throw new HttpError(409, "Schedule this phone's searches through its client jobs");
-  const job = await prisma.rpaJob.create({
-    data: {
-      deviceId: device.id,
-      templateId,
-      name,
-      variablesJson: JSON.stringify(variables),
-      status: "queued",
-    },
+  if (idempotencyKey !== undefined && (idempotencyKey.length < 8 || idempotencyKey.length > 100 || idempotencyKey !== idempotencyKey.trim() || /[\x00-\x1f\x7f]/.test(idempotencyKey))) {
+    throw new HttpError(400, "Idempotency key must be 8–100 characters");
+  }
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)])) : value;
+  const variablesJson = JSON.stringify(canonical(variables));
+  const stableId = idempotencyKey === undefined ? undefined : `rpa-${createHash("sha256").update(JSON.stringify([device.tenantId, idempotencyKey])).digest("hex")}`;
+  const existing = async () => {
+    if (!stableId) return null;
+    const previous = await prisma.rpaJob.findUnique({ where: { id: stableId }, include: { device: { select: { tenantId: true, imageId: true } } } });
+    if (!previous) return null;
+    if (previous.deviceId !== device.id || previous.templateId !== templateId || previous.name !== name ||
+        JSON.stringify(canonical(JSON.parse(previous.variablesJson))) !== variablesJson) throw new HttpError(409, "Idempotency key was already used for different RPA work");
+    return previous;
+  };
+  const accepted = await existing();
+  if (!accepted) siteIssueAt(new Date());
+  const job = accepted ?? await withTripLease(device.id, device.tenantId, async lease => {
+    const previous = await existing();
+    if (previous) return previous;
+    await lease.assertOwned();
+    return prisma.$transaction(async tx => {
+      await assertNoPendingRpa(device.id, tx);
+      await assertNoWarmup(device.id, tx);
+      if (await tx.site.count({ where: { device: { imageId: device.imageId } } })) throw new HttpError(409, "Schedule this phone's searches through its client jobs");
+      if (await tx.device.count({ where: { imageId: device.imageId, activeTripId: { not: null } } })) throw new HttpError(409, "A driving trip owns this phone. Finish or cancel it first.");
+      if (await tx.warmupCampaign.count({ where: { imageId: device.imageId, reservedImageId: { not: null } } })) throw new HttpError(409, "A warmup campaign owns this physical phone");
+      return tx.rpaJob.create({
+        data: {
+          ...(stableId ? { id: stableId } : {}),
+          deviceId: device.id,
+          templateId,
+          name,
+          variablesJson,
+          status: "enqueue_pending",
+        },
+        include: { device: { select: { tenantId: true, imageId: true } } },
+      });
+    });
+  }).catch(async error => {
+    if ((error as { code?: string }).code === "P2002") {
+      const previous = await existing();
+      if (previous) return previous;
+    }
+    throw error;
   });
-  await enqueueRpa({
-    rpaJobId: job.id,
-    tenantId: device.tenantId,
-    deviceId: device.id,
-    imageId: device.imageId,
-    templateId,
-    templateType: 2,
-    name,
-    variables,
-  });
+  if (!pendingRpaStatuses.includes(job.status)) return { queued: true, jobId: job.id, delivery: "settled", message: `This request was already accepted. Current job state: ${job.status}.` };
+  const delivery = await deliverSavedRpaIntent(job);
+  return { queued: true, jobId: job.id, delivery, message: delivery === "queued"
+    ? "Job accepted and queued."
+    : "Job saved. Queue delivery is pending and will retry automatically; do not submit it again." };
 }

@@ -1,4 +1,4 @@
-import { DelayedError, Worker } from "bullmq";
+import { Worker } from "bullmq";
 import { keyPool } from "../api/keyPool.js";
 import { prisma } from "../db.js";
 import { logger } from "../logger.js";
@@ -32,7 +32,7 @@ export function startTelemetryWorker(): Worker<TelemetryJobData> {
           if (err instanceof HttpError && err.status === 409) return;
           if (err instanceof RateLimitError) {
             await worker.rateLimit(err.retryAfterMs);
-            throw new DelayedError();
+            throw Worker.RateLimitError();
           }
           throw err;
         }

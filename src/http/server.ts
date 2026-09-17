@@ -46,6 +46,8 @@ import { handleSiteRequest } from "./sites.js";
 import { getTrip } from "../trips/service.js";
 import { haversineMeters } from "../geo/haversine.js";
 import { checkPhoneLocation } from "../ops/phoneLocationCheck.js";
+import { inventoryImportBackoff } from "../orchestrator/importBackoff.js";
+import { listLegacyRpaJobs, resolveLegacyRpaJob } from "../queue/rpaLifecycle.js";
 
 const latitude = z.number().finite().min(-90).max(90);
 const longitude = z.number().finite().min(-180).max(180);
@@ -175,6 +177,7 @@ async function snapshot(tenantId?: string) {
     },
     devices,
     folderInventory,
+    inventoryImportIssues: tenantId ? inventoryImportBackoff.statuses(tenantId) : [],
     discoveredDevices: runtime.onlineDevices,
     keys,
     rpa,
@@ -596,10 +599,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     const rpa = path.match(/^\/devices\/([^/]+)\/rpa$/);
+    if (method === "GET" && rpa) {
+      if (!tenantId) throw new HttpError(401, "Workspace required");
+      send(res, 200, await listLegacyRpaJobs(scopedDevice!.id, tenantId));
+      return;
+    }
+    const rpaResolution = path.match(/^\/devices\/([^/]+)\/rpa\/([^/]+)\/resolve$/);
+    if (method === "POST" && rpaResolution) {
+      if (!tenantId) throw new HttpError(401, "Workspace required");
+      send(res, 200, await resolveLegacyRpaJob(scopedDevice!.id, tenantId, decodeURIComponent(rpaResolution[2]!), await readJson(req)));
+      return;
+    }
     if (method === "POST" && rpa) {
-      const body = z.object({ templateId: z.string().min(1).max(200), name: z.string().max(200).optional(), variables: z.record(z.unknown()).optional() }).parse(await readJson(req));
-      await queueSearch(scopedDevice!.id, body.templateId, body.variables ?? {}, body.name, tenantId);
-      send(res, 202, { queued: true });
+      const body = z.object({ templateId: z.string().min(1).max(200), name: z.string().max(200).optional(), variables: z.record(z.unknown()).optional(), idempotencyKey: z.string().min(8).max(100).optional() }).strict().parse(await readJson(req));
+      send(res, 202, await queueSearch(scopedDevice!.id, body.templateId, body.variables ?? {}, body.name, tenantId, body.idempotencyKey));
       return;
     }
 

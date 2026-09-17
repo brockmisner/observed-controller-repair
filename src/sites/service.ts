@@ -14,6 +14,8 @@ import { dispatchGps, gpsIsDue } from "../orchestrator/locationDispatch.js";
 import { withTripLease } from "../trips/lease.js";
 import { haversineMeters } from "../geo/haversine.js";
 import { prepareSiteProfile, refreshSiteLibrary, type SiteProfile } from "./profile.js";
+import { assertSiteJobReady, siteJobReadiness } from "./readiness.js";
+import { assertNoPendingRpa } from "../queue/rpaOwnership.js";
 
 export const busyJobStates = ["PREFLIGHT", "SUBMITTING", "AWAITING_RESULT", "UNCONFIRMED", "TIMED_OUT"];
 const point = { lat: z.number().finite().min(-90).max(90), lng: z.number().finite().min(-180).max(180) };
@@ -113,7 +115,7 @@ export async function listSites(tenantId: string) {
   ]);
   const jobs = [...new Map([...pendingJobs, ...recentJobs].map((job) => [job.id, job])).values()]
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  return { sites: sites.map(serializeSite), devices, jobs: jobs.map(serializeJob) };
+  return { sites: sites.map(serializeSite), devices, jobs: jobs.map(serializeJob), readiness: siteJobReadiness(process.env, config.dryRun) };
 }
 export async function createSite(tenantId: string, input: unknown) {
   const data = createSiteSchema.parse(input);
@@ -121,12 +123,14 @@ export async function createSite(tenantId: string, input: unknown) {
     const device = await prisma.device.findFirst({ where: { id: data.deviceId, tenantId } });
     if (!device) throw new HttpError(404, "Device not found");
     await assertNoWarmup(device.id);
+    await assertNoPendingRpa(device.id);
     if (device.activeTripId) throw new HttpError(409, "Cancel this phone's driving trip before assigning a client");
     if (await prisma.site.findFirst({ where: { OR: [{ deviceId: device.id }, { tenantId, proxyIp: data.proxyIp }] } })) {
       throw new HttpError(409, "This phone or proxy IP already belongs to a client");
     }
     const row = await prisma.$transaction(async (tx) => {
       await assertNoWarmup(device.id, tx);
+      await assertNoPendingRpa(device.id, tx);
       // Binding freezes the legacy ticker; it does not write to DuoPlus.
       const claimed = await tx.device.updateMany({ where: { id: device.id, tenantId, activeTripId: null, site: { is: null } },
         data: { active: false, anchorLat: data.lat, anchorLng: data.lng } });
@@ -282,6 +286,7 @@ export async function scheduleJob(tenantId: string, id: string, input: unknown) 
     if (existing.requestJson !== requestJson) throw new HttpError(409, "Idempotency key belongs to a different job");
     return serializeJob(existing);
   }
+  assertSiteJobReady(process.env, config.dryRun);
   const scheduledAt = new Date(data.scheduledAt);
   if (scheduledAt.getTime() < Date.now() - 60_000 || scheduledAt.getTime() > Date.now() + 366 * 86_400_000) throw new HttpError(400, "Schedule within the next year");
   if (!site.enabled || site.profileStatus !== "PROVIDER_MATCH" || !site.templateId) throw new HttpError(409, "Enable a prepared client with a matching provider profile and RPA template first");

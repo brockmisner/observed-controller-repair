@@ -10,8 +10,10 @@ import { startHttpServer } from "./http/server.js";
 import { logger } from "./logger.js";
 import { startFleetSync } from "./orchestrator/fleetSync.js";
 import { startScheduler } from "./orchestrator/scheduler.js";
-import { redisConnection } from "./queue/connection.js";
+import { redisConnection, producerConnection } from "./queue/connection.js";
 import { startRpaWorker } from "./queue/rpaWorker.js";
+import { startRpaOutbox } from "./queue/rpaOutbox.js";
+import { closeQueues } from "./queue/queues.js";
 import { startTelemetryWorker } from "./queue/telemetryWorker.js";
 import { recoverInterruptedEnvironments } from "./orchestrator/environment.js";
 import { recoverTrips, startTripScheduler } from "./trips/runner.js";
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
 
   const telemetryWorker = startTelemetryWorker();
   const rpaWorker = startRpaWorker();
+  const rpaOutbox = startRpaOutbox();
   const fleetSync = startFleetSync();
   const scheduler = startScheduler(400);
   const trips = startTripScheduler();
@@ -46,17 +49,32 @@ async function main(): Promise<void> {
   const warmup = startWarmupPlanner();
   const http = startHttpServer();
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info({ signal }, "shutting down");
+    // An unavailable Redis must not prevent process termination. Any RPA already
+    // marked submitting remains owned and requires reconciliation after restart.
+    const deadline = setTimeout(() => {
+      logger.error("Shutdown deadline reached; unfinished work remains recorded for recovery");
+      producerConnection.disconnect();
+      redisConnection.disconnect();
+      process.exit(1);
+    }, 25_000);
+    deadline.unref();
     fleetSync.stop();
     clearInterval(scheduler);
     http.close();
+    await rpaOutbox.stop();
     await trips.stop();
     await sites.stop();
     await warmup.stop();
     await Promise.allSettled([telemetryWorker.close(), rpaWorker.close()]);
-    await redisConnection.quit();
+    await closeQueues();
+    redisConnection.disconnect();
     await prisma.$disconnect();
+    clearTimeout(deadline);
     process.exit(0);
   };
 

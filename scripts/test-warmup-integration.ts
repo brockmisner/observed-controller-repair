@@ -5,10 +5,10 @@ import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 const dir=mkdtempSync(join(tmpdir(),'warmup-test-'));
 process.env.DATABASE_URL=`file:${dir}/test.db`;
-process.env.NODE_ENV='test';process.env.DRY_RUN='false';process.env.REDIS_PORT='1';
-execFileSync('./node_modules/.bin/prisma',['db','push','--skip-generate'],{env:process.env,stdio:'pipe'});
+process.env.NODE_ENV='test';process.env.DRY_RUN='false';process.env.REDIS_PORT='1';process.env.REDIS_URL='redis://127.0.0.1:1';process.env.REDIS_PRIVATE_URL='';
+execFileSync(process.execPath,['node_modules/prisma/build/index.js','db','push','--skip-generate'],{env:{...process.env,RUST_LOG:'info'},stdio:'pipe'});
 const {prisma}=await import('../src/db.js');
-const {redisConnection}=await import('../src/queue/connection.js');redisConnection.disconnect();
+const {redisConnection,producerConnection}=await import('../src/queue/connection.js');redisConnection.disconnect();producerConnection.disconnect();
 const service=await import('../src/warmup/service.js');
 const runner=await import('../src/warmup/runner.js');
 const {localParts}=await import('../src/warmup/model.js');
@@ -16,6 +16,7 @@ let passed=0;async function check(name:string,fn:()=>Promise<void>){await fn();p
 const day=localParts(new Date(),'UTC').date;
 let submits=0,providerStatus=0,submissionTimeout=false;
 runner.warmupIo.withTripLease=async(_d:any,_t:any,fn:any)=>fn({assertOwned:async()=>{}});
+service.warmupServiceIo.withTripLease=runner.warmupIo.withTripLease;
 runner.warmupIo.checkDevicePower=async()=>({poweredOn:true,duoPlusStatus:1}) as any;
 runner.warmupIo.getDeviceStatus=async(imageId)=>({id:imageId,gps:{latitude:'25.78',longitude:'-80.13',type:2},wifi:{name:'Current',bssid:'aa:bb:cc:dd:ee:00',mac:'aa:bb:cc:dd:ee:02',status:1}});
 runner.warmupIo.triggerRpaTask=async(_i,_t,_v,opts)=>{await opts?.beforeSend?.();submits++;if(submissionTimeout)throw new Error('Lost acknowledgment');return {message:'success'};};
@@ -49,5 +50,20 @@ try{
   runner.warmupIo.warmupProvider=async(path,body:any)=>path==='subscriptions'?{list:[],total_page:0}:previous(path,body,'a');
   await runner.scanWarmup();assert.equal(submits,2);const r=await prisma.warmupRun.findFirstOrThrow({where:{campaignId:next.id,dayNumber:1}});assert.match(r.error!,/available DuoPlus subscription slot/);assert.equal((await service.ownCampaign('a',next.id)).powerOwned,false);
  });
+ await check('legacy RPA blocks campaign creation, extension, resume, and dispatch across duplicate phone rows',async()=>{
+  for(const [id,tenantId] of [['physical-a','a'],['physical-b','b']])await prisma.device.create({data:{id,tenantId,imageId:'shared-physical-phone',campaignEnd:new Date(Date.now()+86400000*50),anchorLat:25.78,anchorLng:-80.13,currentLat:25.78,currentLng:-80.13,wifiSsid:'Existing',wifiBssid:'aa:bb:cc:dd:ee:00',wifiMac:'aa:bb:cc:dd:ee:02'}});
+  const next=await service.campaignCreate('a',{...input,name:'RPA ownership test',deviceId:'physical-a'});
+  await prisma.warmupCampaign.update({where:{id:next.id},data:{status:'COMPLETED',reservedImageId:null,completedAt:new Date()}});
+  await prisma.rpaJob.create({data:{id:'legacy-owner',deviceId:'physical-b',templateId:'custom',name:'Legacy',status:'unconfirmed'}});
+  await assert.rejects(service.campaignCreate('a',{...input,name:'Conflicting campaign',deviceId:'physical-a'}),/RPA/);
+  await assert.rejects(service.campaignAction('a',next.id,'extend',{durationDays:60}),/RPA/);
+  assert.equal((await service.ownCampaign('a',next.id)).reservedImageId,null);
+  await prisma.warmupCampaign.update({where:{id:next.id},data:{status:'PAUSED',reservedImageId:'shared-physical-phone'}});
+  await assert.rejects(service.campaignAction('a',next.id,'resume'),/RPA/);
+  await prisma.warmupCampaign.update({where:{id:next.id},data:{status:'RUNNING'}});
+  await service.materializeDays(next.id);
+  const before=submits;await runner.scanWarmup();assert.equal(submits,before);
+  assert.equal((await prisma.warmupRun.findFirstOrThrow({where:{campaignId:next.id,dayNumber:1}})).status,'WAITING');
+ });
  console.log(`${passed} integration checks passed`);
-}finally{await prisma.$disconnect();redisConnection.disconnect();rmSync(dir,{recursive:true,force:true});}
+}finally{await prisma.$disconnect();redisConnection.disconnect();producerConnection.disconnect();rmSync(dir,{recursive:true,force:true});}

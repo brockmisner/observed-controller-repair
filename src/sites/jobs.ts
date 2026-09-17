@@ -11,6 +11,7 @@ import { checkDevicePower } from "../orchestrator/powerCheck.js";
 import { withEnvironmentWindow } from "../orchestrator/deviceOperations.js";
 import { withTripLease } from "../trips/lease.js";
 import { redisConnection } from "../queue/connection.js";
+import { assertSiteJobReady, siteCallbackBase, siteIssueAt } from "./readiness.js";
 import { busyJobStates, ownSite, parseJson, profileProblems, providerSnapshot, refreshSite,
   serializeJob, serializeResult, type StoredSiteProfile } from "./service.js";
 
@@ -24,23 +25,6 @@ const resultSchema = z.object({
   capturedAt: z.string().datetime({ offset: true }),
 }).strict();
 
-function callbackBase(): string {
-  try {
-    const url = new URL(process.env.SITE_RESULT_BASE_URL ?? "");
-    if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error();
-    return url.origin;
-  } catch { throw new HttpError(409, "Set SITE_RESULT_BASE_URL to this service's public HTTPS origin before running jobs"); }
-}
-function issueAt(date: Date): string {
-  const zone = process.env.SITE_RPA_TIMEZONE;
-  if (!zone) throw new HttpError(409, "Set SITE_RPA_TIMEZONE to the DuoPlus automation scheduler timezone");
-  try {
-    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
-    const value = (type: string) => parts.find((part) => part.type === type)!.value;
-    return `${value("year")}-${value("month")}-${value("day")} ${value("hour")}:${value("minute")}`;
-  } catch { throw new HttpError(409, "SITE_RPA_TIMEZONE is not a valid timezone"); }
-}
-
 export async function runSiteJob(id: string): Promise<void> {
   const initial = await prisma.siteJob.findUnique({ where: { id } });
   if (!initial || initial.status !== "QUEUED" || initial.scheduledAt > new Date()) return;
@@ -53,14 +37,14 @@ export async function runSiteJob(id: string): Promise<void> {
     if (!claim.count) return;
     let submitted = false;
     try {
-      if (config.dryRun) throw new HttpError(409, "Tracker jobs cannot submit in dry-run mode");
+      assertSiteJobReady(process.env, config.dryRun);
       const site = await ownSite(job.tenantId, job.siteId);
       if (!site.enabled || site.profileStatus !== "PROVIDER_MATCH" || !site.templateId) throw new HttpError(409, "Client jobs are disabled, template missing, or profile needs review");
       if (site.device.activeTripId || site.device.campaignEnd <= new Date() || site.device.phase === "EXPIRED") throw new HttpError(409, "Client phone is unavailable or expired");
       if (job.motion !== "STILL") throw new HttpError(409, "This tracker worker supports stationary client measurements only");
       const profile = parseJson<StoredSiteProfile>(site.profileJson);
       if (!profile?.wifi || !profile.baseline) throw new HttpError(409, "Client profile is incomplete");
-      const base = callbackBase();
+      const base = siteCallbackBase();
       const power = await checkDevicePower(site.deviceId, site.tenantId);
       if (!power.poweredOn || power.duoPlusStatus !== 1) throw new HttpError(409, "The client phone is not confirmed ON; no RPA task was sent");
       const observed = providerSnapshot(await getDeviceStatus(site.device.imageId, site.tenantId), site.device.imageId);
@@ -68,7 +52,7 @@ export async function runSiteJob(id: string): Promise<void> {
       if (problems.length) throw new HttpError(409, problems.join("; "));
       // Schedule after readback, on the next full minute plus one; never truncate into the past.
       const executionAt = new Date((Math.floor(Date.now() / 60_000) + 2) * 60_000);
-      const scheduledIssue = issueAt(executionAt);
+      const scheduledIssue = siteIssueAt(executionAt);
       const accepted = await prisma.locationRequest.findFirst({ where: { deviceId: site.deviceId, tenantId: site.tenantId, status: "API_ACCEPTED" }, orderBy: { acceptedAt: "desc" } });
       const preflight = {
         siteId: site.id, imageId: site.device.imageId, profileRevision: site.profileRevision,
