@@ -66,8 +66,10 @@ export async function materializeDays(id:string,now=new Date()) {
  const today=Math.max(1,dayNumber(c.startDate,localParts(now,c.timezone).date));
  // Persist a rolling seven-day window. Earlier days are materialized as MISSED after downtime.
  const latest=await prisma.warmupRun.aggregate({where:{campaignId:id},_max:{dayNumber:true}});
- const from=Math.max(1,(latest._max.dayNumber??1)-1),to=Math.min(c.durationDays,today+7);
+ const from=Math.max(1,latest._max.dayNumber??1),to=Math.min(c.durationDays,today+7);
+ const existing=new Set((await prisma.warmupRun.findMany({where:{campaignId:id,dayNumber:{gte:from,lte:to}},select:{dayNumber:true,slotKey:true}})).map(r=>`${r.dayNumber}:${r.slotKey}`));
  for(const item of dailyPlan(c.startDate,c.durationDays,c.timezone,JSON.parse(c.scheduleJson),from,to)) {
+  if(existing.has(`${item.dayNumber}:${item.slotKey}`))continue;
   const runId=randomUUID();
   await prisma.warmupRun.upsert({where:{campaignId_dayNumber_slotKey:{campaignId:id,dayNumber:item.dayNumber,slotKey:item.slotKey}},update:{},create:{id:runId,campaignId:id,dayNumber:item.dayNumber,slotKey:item.slotKey,scheduledAt:item.scheduledAt,deadlineAt:item.deadlineAt,taskJson:JSON.stringify(item.task),providerName:`warmup-${runId}`,status:item.deadlineAt<=now?'MISSED':'WAITING',...(item.deadlineAt<=now?{completedAt:now,error:'Daily window passed before execution'}:{})}});
  }
