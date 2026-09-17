@@ -17,8 +17,12 @@ Devices → Overview → **Verify player APK** calls the authenticated,
 tenant-scoped `POST /devices/:id/player/verify` endpoint. It is available only
 for the physical image configured by `DUOMOVE_IMAGE_ID` and its existing
 `ADB_PREFLIGHT_ENDPOINT` mapping. Other phones remain unsupported by this direct
-ADB check. A physical image registered in another tenant is rejected, and the
-device assignment is checked again before returning results.
+ADB check. For a physical image registered in another tenant, shared ADB remains
+blocked. APK and location inspection instead uses a fixed read-only DuoPlus
+command authorized by the requesting workspace's provider API key. Provider
+denial stops the check; it never falls back to the shared ADB token. Player socket
+status is unavailable on this path. Device assignment is checked again before
+returning results.
 
 The inspection only reads the installed APK path, package metadata and SHA-256,
 sends the existing authenticated player `status` command, and reads Android's

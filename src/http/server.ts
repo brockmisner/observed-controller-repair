@@ -6,7 +6,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { prisma } from "../db.js";
 import { logger } from "../logger.js";
-import { getDeviceStatus, listCloudPhones, observeDeviceLocation, validateDuoPlusKey } from "../api/duoPlusClient.js";
+import { getDeviceStatus, listCloudPhones, observeDeviceLocation, validateDuoPlusKey, inspectDevicePlayerApk } from "../api/duoPlusClient.js";
 import {
   parkStationary,
   queueSearch,
@@ -532,7 +532,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const result = await verifyPlayer(scopedDevice!.id, tenantId, {
         getDevice: (id, tenantId) => prisma.device.findFirst({ where: { id, tenantId } }),
         otherTenantHasImage: async (imageId, tenantId) => Boolean(await prisma.device.count({ where: { imageId, tenantId: { not: tenantId } } })),
-        configuredImage: playerImage, inspect: inspectPlayerPhone,
+        configuredImage: playerImage, inspect: async () => ({ ...await inspectPlayerPhone(), verificationSource: 'ADB' }),
+        inspectViaProvider: inspectDevicePlayerApk,
       });
       send(res, 200, result);
       return;

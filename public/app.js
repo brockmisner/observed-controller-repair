@@ -776,13 +776,14 @@ async function verifyPlayer(device) {
   try {
     const result = await api(`/devices/${encodeURIComponent(device.id)}/player/verify`, { method: "POST", body: JSON.stringify({}) });
     if (sessionVersion !== state.sessionVersion) return;
-    if (result.deviceId !== device.id || result.imageId !== device.imageId || result.readOnly !== true || !result.player?.connected) throw new Error("Player inspection returned an invalid identity.");
+    if (result.deviceId !== device.id || result.imageId !== device.imageId || result.readOnly !== true ||
+        !(result.verificationSource === "DUOPLUS_WORKSPACE_COMMAND" || result.player?.connected === true)) throw new Error("Player inspection returned an invalid identity.");
     operation.phoneReadback = { deviceId: device.id, imageId: device.imageId, observation: result.observation };
     const installed = result.installed;
     operation.playerError = !installed || !installed.matchesUploadedApk;
     operation.playerMessage = `Checked ${new Date(result.checkedAt).toLocaleString()}. ` +
       (installed ? `${installed.packageName} ${installed.versionName}: ${installed.matchesUploadedApk ? "SHA-256 matches your uploaded APK" : "SHA-256 differs from your uploaded APK"}. ` : "Installed APK could not be identified. ") +
-      `Player ${result.player.state}; cleanup ${result.player.cleanupOk ? "confirmed" : "unconfirmed"}. ` +
+      (result.player ? `Player ${result.player.state}; cleanup ${result.player.cleanupOk ? "confirmed" : "unconfirmed"}. ` : "Read through this workspace's DuoPlus credentials. Shared ADB player status was not inspected. ") +
       `${result.observation?.reason || result.locationError || "Location unavailable."} Wi-Fi, cell and Bluetooth were not observed.`;
   } catch (error) {
     if (sessionVersion === state.sessionVersion) { operation.playerMessage = error.message; operation.playerError = true; operation.phoneReadback = null; }

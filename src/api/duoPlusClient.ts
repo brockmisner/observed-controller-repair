@@ -246,6 +246,25 @@ export async function getDeviceStatus(imageId: string, tenantId?: string): Promi
   return post("/api/v1/cloudPhone/info", { image_id: imageId }, tenantId);
 }
 
+/** No shared ADB token: provider verifies access using this tenant's API key. */
+export async function inspectDevicePlayerApk(imageId: string, tenantId: string) {
+  if (config.dryRun) throw new HttpError(409, 'Player inspection is disabled in dry-run mode');
+  validateImageId(imageId);
+  if (!tenantId?.trim()) throw new HttpError(401, 'Workspace required');
+  const { PLAYER_INSPECTION_COMMAND, splitPlayerInspection } = await import('../ops/playerVerification.js');
+  const { readPhoneCommandContent, readPhoneLocation } = await import('./phoneNavigation.js');
+  let startedAt = 0;
+  const response = await post<unknown>('/api/v1/cloudPhone/command', { image_id: imageId, command: PLAYER_INSPECTION_COMMAND }, tenantId,
+    async () => { startedAt = Date.now(); }, true);
+  let result: ReturnType<typeof splitPlayerInspection>;
+  try { result = splitPlayerInspection(readPhoneCommandContent(response)); }
+  catch { throw new HttpError(502, 'DuoPlus could not read the installed player APK identity'); }
+  return { checkedAt: new Date().toISOString(), readOnly: true, installed: result.installed, player: null,
+    observation: readPhoneLocation(result.location, new Date(), Date.now() - startedAt),
+    verificationSource: 'DUOPLUS_WORKSPACE_COMMAND',
+    radios: { wifi: 'NOT_OBSERVED', cell: 'NOT_OBSERVED', bluetooth: 'NOT_OBSERVED' } };
+}
+
 export async function launchDeviceMaps(
   imageId: string,
   destination: import("./providerGps.js").GpsPoint,

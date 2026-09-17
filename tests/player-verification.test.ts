@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { installedPlayerInfo, playerApkPath, UPLOADED_PLAYER_SHA256, verifyPlayer } from '../src/ops/playerVerification.js';
+import { installedPlayerInfo, playerApkPath, splitPlayerInspection, UPLOADED_PLAYER_SHA256, verifyPlayer } from '../src/ops/playerVerification.js';
 
 test('installed APK fingerprint distinguishes exact bytes from matching version labels', () => {
   const dump = '  versionCode=1 minSdk=29 targetSdk=34\n  versionName=1.0.0\n';
@@ -45,6 +45,28 @@ test('reassignment during inspection withholds the old physical phone response',
   const h = harness();
   h.deps.inspect = async () => { h.setDevice({ id: 'phone', tenantId: 'owner', imageId: 'other' }); return { checkedAt: 'now', readOnly: true }; };
   await assert.rejects(verifyPlayer('phone', 'owner', h.deps), /Device not found/);
+});
+test('shared assignment uses independently authorized provider inspection and never shared ADB', async () => {
+  const h = harness();
+  h.deps.otherTenantHasImage = async () => true;
+  let authorizationCalls = 0;
+  const deps = { ...h.deps, inspectViaProvider: async (image: string, tenant: string) => {
+    assert.equal(image, 'image'); assert.equal(tenant, 'owner'); authorizationCalls++;
+    return { checkedAt: 'provider', readOnly: true };
+  } };
+  assert.equal((await verifyPlayer('phone', 'owner', deps)).checkedAt, 'provider');
+  assert.equal(authorizationCalls, 1); assert.equal(h.reads(), 0);
+  deps.inspectViaProvider = async () => { throw new Error('provider denied access'); };
+  await assert.rejects(verifyPlayer('phone', 'owner', deps), /provider denied access/);
+  assert.equal(h.reads(), 0);
+});
+test('provider inspection separates bounded sections and requires a real APK checksum', () => {
+  const content = `100.0 0.0\nlast location\nDUOMOVE_PACKAGE_INFO\n  versionCode=1 minSdk=29\n  versionName=1.0.0\nDUOMOVE_APK_SHA256\n${UPLOADED_PLAYER_SHA256}  /data/app/x/base.apk\n`;
+  const value = splitPlayerInspection(content);
+  assert.equal(value.location, '100.0 0.0\nlast location');
+  assert.equal(value.installed.matchesUploadedApk, true);
+  assert.throws(() => splitPlayerInspection(content.replace(UPLOADED_PLAYER_SHA256, 'unavailable')));
+  assert.throws(() => splitPlayerInspection(content + '\nDUOMOVE_PACKAGE_INFO\nextra'));
 });
 
 const context = { module: { exports: {} as { freshPoint: (...args: any[]) => any } } };
