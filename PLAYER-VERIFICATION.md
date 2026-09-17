@@ -18,8 +18,8 @@ tenant-scoped `POST /devices/:id/player/verify` endpoint. It is available only
 for the physical image configured by `DUOMOVE_IMAGE_ID` and its existing
 `ADB_PREFLIGHT_ENDPOINT` mapping. Other phones remain unsupported by this direct
 ADB check. For a physical image registered in another tenant, shared ADB remains
-blocked. APK and location inspection instead uses a fixed read-only DuoPlus
-command authorized by the requesting workspace's provider API key. Provider
+blocked. APK and location inspection instead uses fixed read-only DuoPlus
+commands authorized by the requesting workspace's provider API key. Provider
 denial stops the check; it never falls back to the shared ADB token. Player socket
 status is unavailable on this path. Device assignment is checked again before
 returning results.
@@ -28,7 +28,7 @@ The inspection only reads the installed APK path, package metadata and SHA-256,
 sends the existing authenticated player `status` command, and reads Android's
 last-location diagnostics with device uptime. It neither installs an APK nor
 changes permissions, starts playback, renews the playback lease, clears data,
-changes coordinates or restarts the player. Concurrent requests share one
+changes coordinates or restarts the player. Concurrent ADB requests share one
 inspection. Connection failure is an error; an unavailable package fingerprint
 or stale/absent location remains explicitly unverified.
 

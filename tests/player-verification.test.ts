@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { installedPlayerInfo, playerApkPath, splitPlayerInspection, UPLOADED_PLAYER_SHA256, verifyPlayer } from '../src/ops/playerVerification.js';
+import { installedPlayerInfo, playerApkPath, inspectPlayerPackage, UPLOADED_PLAYER_SHA256, verifyPlayer } from '../src/ops/playerVerification.js';
 
 test('installed APK fingerprint distinguishes exact bytes from matching version labels', () => {
   const dump = '  versionCode=1 minSdk=29 targetSdk=34\n  versionName=1.0.0\n';
@@ -60,13 +60,19 @@ test('shared assignment uses independently authorized provider inspection and ne
   await assert.rejects(verifyPlayer('phone', 'owner', deps), /provider denied access/);
   assert.equal(h.reads(), 0);
 });
-test('provider inspection separates bounded sections and requires a real APK checksum', () => {
-  const content = `100.0 0.0\nlast location\nDUOMOVE_PACKAGE_INFO\n  versionCode=1 minSdk=29\n  versionName=1.0.0\nDUOMOVE_APK_SHA256\n${UPLOADED_PLAYER_SHA256}  /data/app/x/base.apk\n`;
-  const value = splitPlayerInspection(content);
-  assert.equal(value.location, '100.0 0.0\nlast location');
-  assert.equal(value.installed.matchesUploadedApk, true);
-  assert.throws(() => splitPlayerInspection(content.replace(UPLOADED_PLAYER_SHA256, 'unavailable')));
-  assert.throws(() => splitPlayerInspection(content + '\nDUOMOVE_PACKAGE_INFO\nextra'));
+test('provider inspection uses only validated fixed commands and stops on an invalid package path', async () => {
+  const commands: string[] = [];
+  const value = await inspectPlayerPackage(async command => {
+    commands.push(command);
+    if (command.startsWith('pm path ')) return 'package:/data/app/x/base.apk';
+    if (command.startsWith('dumpsys package ')) return '  versionCode=1 minSdk=29\n  versionName=1.0.0\n';
+    return `${UPLOADED_PLAYER_SHA256}  /data/app/x/base.apk`;
+  });
+  assert.equal(value.matchesUploadedApk, true);
+  assert.deepEqual(commands, ['pm path net.stakeout.duomove.player', 'dumpsys package net.stakeout.duomove.player', 'sha256sum /data/app/x/base.apk']);
+  let calls = 0;
+  await assert.rejects(inspectPlayerPackage(async () => { calls++; return 'package:/data/app/x/$(id)/base.apk'; }));
+  assert.equal(calls, 1);
 });
 
 const context = { module: { exports: {} as { freshPoint: (...args: any[]) => any } } };

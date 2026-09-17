@@ -2,23 +2,19 @@ import { HttpError } from '../http/errors.js';
 
 export const UPLOADED_PLAYER_SHA256 = '620d7714280e98048a16d7fcd0320fed3d8925c7377997eadad4b99adfcd5dbf';
 export const PLAYER_PACKAGE = 'net.stakeout.duomove.player';
-// Fixed read-only command, executed using the requesting workspace's provider key.
-export const PLAYER_INSPECTION_COMMAND = [
-  'cat /proc/uptime', 'dumpsys location',
-  'echo DUOMOVE_PACKAGE_INFO', `dumpsys package ${PLAYER_PACKAGE} | grep -e versionCode= -e versionName=`,
-  'echo DUOMOVE_APK_SHA256', `pm path ${PLAYER_PACKAGE} | cut -d: -f2- | xargs sha256sum`,
-].join('; ');
-
-export function splitPlayerInspection(content: string) {
-  const parts = content.split(/\r?\nDUOMOVE_PACKAGE_INFO\r?\n/);
-  const metadata = parts[1]?.split(/\r?\nDUOMOVE_APK_SHA256\r?\n/);
-  if (parts.length !== 2 || metadata?.length !== 2) throw new Error('Player inspection output was incomplete');
-  return { location: parts[0]!, installed: installedPlayerInfo(metadata[0]!, metadata[1]!) };
+/** Separate bounded reads; no compound shell framing or user-provided commands. */
+export async function inspectPlayerPackage(command: (fixedCommand: string) => Promise<string>) {
+  const path = playerApkPath(await command(`pm path ${PLAYER_PACKAGE}`));
+  const [dump, checksum] = await Promise.all([
+    command(`dumpsys package ${PLAYER_PACKAGE}`),
+    command(`sha256sum ${path}`),
+  ]);
+  return installedPlayerInfo(dump, checksum);
 }
 
 export function playerApkPath(output: string): string {
   const paths = output.trim().split(/\r?\n/);
-  if (paths.length !== 1 || !/^package:\/data\/app\/[A-Za-z0-9_~+=.\/-]+\/base\.apk$/.test(paths[0]!)) {
+  if (paths.length !== 1 || !/^package:\/data\/app\/[A-Za-z0-9_~+=.\/-]+\/base\.apk$/.test(paths[0]!) || paths[0]!.includes('/../')) {
     throw new Error('Installed player APK path was not recognized');
   }
   return paths[0]!.slice('package:'.length);
