@@ -60,6 +60,15 @@ test('shared assignment uses independently authorized provider inspection and ne
   await assert.rejects(verifyPlayer('phone', 'owner', deps), /provider denied access/);
   assert.equal(h.reads(), 0);
 });
+test('other phones use their own workspace-authorized provider inspection', async () => {
+  const h = harness();
+  h.deps.configuredImage = () => 'different-adb-phone';
+  const result = await verifyPlayer('phone', 'owner', { ...h.deps,
+    inspectViaProvider: async (image, tenant) => {
+      assert.equal(image, 'image'); assert.equal(tenant, 'owner'); return { checkedAt: 'provider', readOnly: true };
+    } });
+  assert.equal(result.checkedAt, 'provider'); assert.equal(h.reads(), 0);
+});
 test('provider inspection uses only validated fixed commands and stops on an invalid package path', async () => {
   const commands: string[] = [];
   const value = await inspectPlayerPackage(async command => {
@@ -106,4 +115,12 @@ test('map consumes trip readback for the correct device, and a newer unknown che
   assert.equal(freshPoint({ ...device, trip }, null, now).lat, fix.point.lat);
   assert.equal(freshPoint({ ...device, trip: { ...trip, imageId: 'other' } }, null, now), null);
   assert.equal(freshPoint({ ...device, trip }, { ...manual, observation: { ...fix, state: 'UNKNOWN', checkedAt: new Date(now + 1).toISOString() } }, now + 1), null);
+});
+test('saved phone readback survives a refresh while freshness and identity checks still apply', () => {
+  const saved = { deviceId: 'phone', imageId: 'image', outcome: 'CHECKED', observation: fix };
+  assert.equal(freshPoint({ ...device, playerVerification: saved }, null, now).lat, fix.point.lat);
+  assert.equal(freshPoint({ ...device, playerVerification: saved }, null, now + 30001), null);
+  assert.equal(freshPoint({ ...device, playerVerification: { ...saved, imageId: 'other' } }, null, now), null);
+  const failed = { ...saved, outcome: 'FAILED', checkedAt: new Date(now + 1).toISOString() };
+  assert.equal(freshPoint({ ...device, playerVerification: failed }, manual, now + 1), null);
 });

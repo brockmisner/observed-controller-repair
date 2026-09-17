@@ -708,9 +708,25 @@ function renderDetail() {
         ${ticks.slice(-10).reverse().map((t) => `<tr><td>${age(t.createdAt)}</td><td>${fmt(t.speedMps, 2)}</td><td>${fmt(t.accuracyM, 1)}</td><td>${fmt(t.bearing, 0)}</td></tr>`).join("")}
       </tbody>
     </table>
-    <div class="section-heading"><h3>Controller events</h3></div><div class="timeline">${ev.slice(-10).map((e) => `<div class="tl"><span>${age(e.createdAt)}</span><b>${escapeHtml(e.kind)}</b><span>${escapeHtml(e.detail)}</span></div>`).join("") || "<div class='meta'>No controller events.</div>"}</div>
+    <div class="section-heading"><h3>Controller events</h3></div><div class="timeline">${ev.slice(-10).map((e) => `<div class="tl"><span>${age(e.createdAt)}</span><b>${escapeHtml(e.kind)}</b><span>${escapeHtml(eventDetail(e))}</span></div>`).join("") || "<div class='meta'>No controller events.</div>"}</div>
   `;
   updateCopyStatus(d);
+}
+
+function playerVerificationSummary(result) {
+  if (!result) return "No player verification recorded.";
+  const checked = `Checked ${new Date(result.checkedAt).toLocaleString()}. `;
+  if (result.outcome === "FAILED") return checked + (result.error || "Phone verification failed.");
+  const installed = result.installed;
+  return checked +
+    (installed ? `${installed.packageName} ${installed.versionName}: ${installed.matchesUploadedApk ? "SHA-256 matches your uploaded APK" : "SHA-256 differs from your uploaded APK"}. ` : "Installed APK could not be identified. ") +
+    (result.player ? `Player ${result.player.state}; cleanup ${result.player.cleanupOk ? "confirmed" : "unconfirmed"}. ` : "Read through this workspace's DuoPlus credentials. Player socket status was not inspected. ") +
+    `${result.observation?.reason || result.locationError || "Location unavailable."} Wi-Fi, cell and Bluetooth were not observed.`;
+}
+
+function eventDetail(event) {
+  if (event.kind !== "PHONE_VERIFICATION") return event.detail;
+  try { return playerVerificationSummary(JSON.parse(event.detail)); } catch { return "Verification record unavailable."; }
 }
 
 function updateCopyStatus(device) {
@@ -723,7 +739,9 @@ function updateCopyStatus(device) {
   if ($("verifyPlayer")) {
     $("verifyPlayer").disabled = Boolean(operation.playerPending);
     $("verifyPlayer").setAttribute("aria-busy", String(Boolean(operation.playerPending)));
-    formMessage("playerVerificationFeedback", operation.playerPending ? "Reading installed APK and player status..." : operation.playerMessage || "No player verification performed in this session.", Boolean(operation.playerError));
+    const saved = device.playerVerification;
+    const failed = operation.playerMessage ? operation.playerError : saved && (saved.outcome === "FAILED" || !saved.installed?.matchesUploadedApk);
+    formMessage("playerVerificationFeedback", operation.playerPending ? "Reading installed APK and player status..." : operation.playerMessage || playerVerificationSummary(saved), Boolean(failed));
   }
   $("checkPhoneLocation").disabled = Boolean(operation.gpsPending || device.activeTripId);
   $("checkPhoneLocation").setAttribute("aria-busy", String(Boolean(operation.gpsPending)));
@@ -781,10 +799,10 @@ async function verifyPlayer(device) {
     operation.phoneReadback = { deviceId: device.id, imageId: device.imageId, observation: result.observation };
     const installed = result.installed;
     operation.playerError = !installed || !installed.matchesUploadedApk;
-    operation.playerMessage = `Checked ${new Date(result.checkedAt).toLocaleString()}. ` +
-      (installed ? `${installed.packageName} ${installed.versionName}: ${installed.matchesUploadedApk ? "SHA-256 matches your uploaded APK" : "SHA-256 differs from your uploaded APK"}. ` : "Installed APK could not be identified. ") +
-      (result.player ? `Player ${result.player.state}; cleanup ${result.player.cleanupOk ? "confirmed" : "unconfirmed"}. ` : "Read through this workspace's DuoPlus credentials. Shared ADB player status was not inspected. ") +
-      `${result.observation?.reason || result.locationError || "Location unavailable."} Wi-Fi, cell and Bluetooth were not observed.`;
+    operation.playerMessage = "";
+    state.snapshotVersion += 1;
+    const current = state.snapshot?.devices.find(d => d.id === device.id && d.imageId === result.imageId);
+    if (current) current.playerVerification = result;
   } catch (error) {
     if (sessionVersion === state.sessionVersion) { operation.playerMessage = error.message; operation.playerError = true; operation.phoneReadback = null; }
   } finally {

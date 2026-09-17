@@ -47,19 +47,18 @@ export async function verifyPlayer<T, U = T>(id: string, tenantId: string, deps:
     if (!device || device.id !== id || device.tenantId !== tenantId || expected && expected !== device.imageId) {
       throw new HttpError(404, 'Device not found');
     }
-    if (!device.imageId || device.imageId !== deps.configuredImage()) {
-      throw new HttpError(409, 'Direct player verification is not configured for this phone');
-    }
+    if (!device.imageId) throw new HttpError(409, 'Phone image is not assigned');
     return device;
   };
   const device = await check();
   const shared = await deps.otherTenantHasImage(device.imageId, tenantId);
-  if (shared && !deps.inspectViaProvider) throw new HttpError(409, 'Resolve the shared physical-phone assignment before inspecting this phone');
+  const useProvider = shared || device.imageId !== deps.configuredImage();
+  if (useProvider && !deps.inspectViaProvider) throw new HttpError(409, 'Workspace-authorized verification is unavailable for this phone');
   // Shared ADB remains blocked. Provider inspection independently authenticates
   // access to the physical image with the requesting tenant's own credentials.
-  const result = shared ? await deps.inspectViaProvider!(device.imageId, tenantId) : await deps.inspect();
+  const result = useProvider ? await deps.inspectViaProvider!(device.imageId, tenantId) : await deps.inspect();
   await check(device.imageId);
-  if (!shared && await deps.otherTenantHasImage(device.imageId, tenantId)) {
+  if (!useProvider && (device.imageId !== deps.configuredImage() || await deps.otherTenantHasImage(device.imageId, tenantId))) {
     throw new HttpError(409, 'Physical-phone assignment changed during inspection');
   }
   return { deviceId: id, imageId: device.imageId, ...result };
