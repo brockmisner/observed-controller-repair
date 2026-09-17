@@ -48,14 +48,16 @@ import { haversineMeters } from "../geo/haversine.js";
 import { checkPhoneLocation } from "../ops/phoneLocationCheck.js";
 import { inventoryImportBackoff } from "../orchestrator/importBackoff.js";
 import { listLegacyRpaJobs, resolveLegacyRpaJob } from "../queue/rpaLifecycle.js";
-import { inspectPlayerPhone, playerImage, usesPlayer } from "../trips/playerConnection.js";
+import { inspectPlayerPhone, playerImage } from "../trips/playerConnection.js";
 import { verifyPlayer } from "../ops/playerVerification.js";
+import { recordVerification, readVerificationRecord, VerificationJobs, VERIFICATION_EVENT } from "../ops/verificationHistory.js";
 
 const latitude = z.number().finite().min(-90).max(90);
 const longitude = z.number().finite().min(-180).max(180);
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(128) });
 const registerSchema = loginSchema.extend({ password: z.string().min(12).max(128), workspace: z.string().trim().max(100).default("") });
 const authAttempts = new Map<string, { count: number; until: number }>();
+const verificationJobs = new VerificationJobs();
 
 function limitAuth(req: IncomingMessage): void {
   const now = Date.now();
@@ -116,6 +118,7 @@ async function snapshot(tenantId?: string) {
   const [deviceRows, keys, rpa, tickRows, activeDevices, poweredOn] = await Promise.all([
     prisma.device.findMany({ where: deviceWhere, orderBy: { updatedAt: "desc" }, include: {
       environment: true,
+      events: { where: { kind: VERIFICATION_EVENT }, orderBy: { createdAt: 'desc' }, take: 1 },
       drivingTrips: { orderBy: { createdAt: "desc" }, take: 1 },
       locationRequests: { orderBy: { requestedAt: "desc" }, take: 1 },
       wigleArchives: { orderBy: { importedAt: "desc" }, select: {
@@ -140,15 +143,20 @@ async function snapshot(tenantId?: string) {
     prisma.device.count({ where: { ...deviceWhere, active: true } }),
     prisma.device.count({ where: { ...deviceWhere, poweredOn: true, duoPlusStatus: 1 } }),
   ]);
-  const devices = await Promise.all(deviceRows.map(async ({ environment, locationRequests, drivingTrips, ...device }) => ({
+  const devices = await Promise.all(deviceRows.map(async ({ environment, locationRequests, drivingTrips, events: verificationEvents, ...device }) => ({
     ...device,
-    playerVerificationSupported: usesPlayer(device.imageId),
+    playerVerificationSupported: Boolean(device.imageId),
+    playerVerification: readVerificationRecord(verificationEvents[0]?.detail, device),
     environment: environmentView(environment, device),
     locationTelemetry: locationRequests[0] ? serializeLocationRequest(locationRequests[0]) : null,
     trip: drivingTrips[0] ? await getTrip(device.tenantId, drivingTrips[0].id) : null,
   })));
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const events = await eventsSince(devices.map((d) => d.id), since);
+  const events = (await eventsSince(devices.map((d) => d.id), since)).filter(event => {
+    if (event.kind !== VERIFICATION_EVENT) return true;
+    const device = devices.find(device => device.id === event.deviceId);
+    return device && readVerificationRecord(event.detail, device) !== null;
+  });
 
   const ticks: Record<string, typeof tickRows> = {};
   for (const tick of tickRows) {
@@ -529,12 +537,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === "POST" && /^\/devices\/[^/]+\/player\/verify$/.test(path)) {
       if (!tenantId) throw new HttpError(401, "Workspace required");
       z.object({}).strict().parse(await readJson(req));
-      const result = await verifyPlayer(scopedDevice!.id, tenantId, {
+      const phone = scopedDevice!;
+      const result = await verificationJobs.run(phone, () => recordVerification(phone, () => verifyPlayer(phone.id, tenantId, {
         getDevice: (id, tenantId) => prisma.device.findFirst({ where: { id, tenantId } }),
         otherTenantHasImage: async (imageId, tenantId) => Boolean(await prisma.device.count({ where: { imageId, tenantId: { not: tenantId } } })),
         configuredImage: playerImage, inspect: async () => ({ ...await inspectPlayerPhone(), verificationSource: 'ADB' }),
         inspectViaProvider: inspectDevicePlayerApk,
-      });
+      }), async record => {
+        await prisma.$transaction(async tx => {
+          if (!await tx.device.findFirst({ where: { id: phone.id, tenantId, imageId: phone.imageId }, select: { id: true } })) {
+            throw new HttpError(404, 'Phone assignment changed during verification');
+          }
+          await tx.deviceEvent.create({ data: { deviceId: phone.id, kind: VERIFICATION_EVENT, detail: JSON.stringify(record) } });
+        });
+      }));
       send(res, 200, result);
       return;
     }

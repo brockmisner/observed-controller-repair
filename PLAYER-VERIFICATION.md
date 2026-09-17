@@ -14,15 +14,23 @@ establish what a phone currently returns, or prove that the installed bytes matc
 ## Checking the installed application
 
 Devices → Overview → **Verify player APK** calls the authenticated,
-tenant-scoped `POST /devices/:id/player/verify` endpoint. It is available only
-for the physical image configured by `DUOMOVE_IMAGE_ID` and its existing
-`ADB_PREFLIGHT_ENDPOINT` mapping. Other phones remain unsupported by this direct
-ADB check. For a physical image registered in another tenant, shared ADB remains
-blocked. APK and location inspection instead uses fixed read-only DuoPlus
-commands authorized by the requesting workspace's provider API key. Provider
+tenant-scoped `POST /devices/:id/player/verify` endpoint. Each registered phone
+can be checked independently. Only the physical image configured by
+`DUOMOVE_IMAGE_ID` and its existing `ADB_PREFLIGHT_ENDPOINT` mapping can use
+direct ADB, and only when it has no assignment in another tenant. All other
+phones use fixed read-only DuoPlus commands authorized by the requesting
+workspace's provider API key. Shared ADB remains blocked. Provider
 denial stops the check; it never falls back to the shared ADB token. Player socket
 status is unavailable on this path. Device assignment is checked again before
-returning results.
+returning results and inside the transaction that saves them.
+
+The latest result survives page reloads and controller restarts. Checks and
+failures are stored as `PHONE_VERIFICATION` events under the phone; the History
+tab displays them in Controller events. Records are matched to the workspace,
+device and physical image, so reassignment cannot expose an earlier owner's
+verification. Raw command output and credentials are not saved. Repeated clicks
+for the same phone share one pending check; other phones have independent checks.
+A failed check supersedes the prior result rather than presenting it as current.
 
 The inspection only reads the installed APK path, package metadata and SHA-256,
 sends the existing authenticated player `status` command, and reads Android's
@@ -40,7 +48,7 @@ are explicitly `NOT_OBSERVED` in this check.
 ## Map readback
 
 Fresh Android last-location fixes appear as a separate purple ring. Both the
-manual GPS check and the current device's trip readback can supply it. The
+manual GPS check, saved APK inspection and current device's trip readback can supply it. The
 popup retains Android's mock indicator. The controller marker remains labeled
 as controller coordinates.
 
@@ -52,6 +60,11 @@ are removed on logout. There is no interpolation or generated fix, and reading
 the map never queries WiGLE or writes radio state.
 
 ## Remaining scope
+
+On 2026-09-17 at 22:38:55 UTC, the deployed controller verified that Demo
+(`N5YK6`) had the exact uploaded APK installed, using the workspace-authorized
+DuoPlus command path. Its last GPS fix was stale; current location and radios
+were not verified.
 
 The radio model remains an explicitly synthetic preview. No Android radio
 plugin is shipped by this change, and device-wide Wi-Fi/cellular/Bluetooth

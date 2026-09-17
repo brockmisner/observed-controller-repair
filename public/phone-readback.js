@@ -5,6 +5,8 @@
     const trip = device.trip?.deviceId === device.id && device.trip?.imageId === device.imageId ? device.trip : null;
     const candidates = [
       manual?.deviceId === device.id && manual?.imageId === device.imageId ? manual.observation : null,
+      device.playerVerification?.deviceId === device.id && device.playerVerification?.imageId === device.imageId ?
+        device.playerVerification.outcome === "FAILED" ? { state: "UNKNOWN", checkedAt: device.playerVerification.checkedAt } : device.playerVerification.observation : null,
       trip?.phoneSync?.player?.phoneObservation,
       trip?.phoneSync?.gps?.observation,
     ].filter(fix => fix && Number.isFinite(Date.parse(fix.checkedAt)));

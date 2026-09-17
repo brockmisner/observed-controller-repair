@@ -46,18 +46,27 @@ production behavior is unchanged.
 No new plugin APK, Android radio receiver, or independent radio observer has been built.
 The existing checker-only module remains unchanged.
 
-Required next steps are to verify a reachable test phone and supported Android radio
-interfaces, implement the module/receiver and authenticated per-device transport,
-wire movement acknowledgments to radio updates and Bluetooth arrival handling, and
-validate through independent Android API readback. DuoPlus documentation describes
+Remaining integration work depends on the rebuilt plugin's actual supported interface:
+
+1. The Android module/receiver and a declared scope for each supported radio API.
+2. Authenticated per-device delivery and acknowledgments bound to image, session,
+   boot and sequence; explicit restart, pause/resume and reconnect behavior.
+3. Live movement acknowledgments feeding the corresponding radio session, with
+   Bluetooth updates gated by confirmed arrival.
+4. Independent Android API readback and a two-phone test covering distinct locations,
+   movement, arrival, disconnect, pause/resume and controller/phone restart.
+
+These pieces are not implemented by the APK verification endpoint. DuoPlus documentation describes
 package-targeted injection; global/system-service coverage cannot be assumed from that.
 
 Direct ADB from the development workspace is unreachable. The deployed Railway
 controller recorded a successful player connection to Demo (`N5YK6`) on
 2026-09-17. The Observatory Android-location check reached the phone but returned
-a stale last fix; this does not verify its current position. The read-only player
-inspection can compare installed APK bytes with the supplied upload through the
-controller's configured ADB connection. It reports radio readback as unavailable.
+a stale last fix; this does not verify its current position. At 22:38:55 UTC the
+read-only inspection confirmed that Demo's installed APK hash matched the supplied
+upload, using the workspace-authorized DuoPlus command path. Shared ADB was not
+used. APK verification is now available per phone and saves checks and failures;
+it still reports radio readback as unavailable.
 
 Existing city JSON remains compatible but lacks fields previously stripped at import.
 Reimporting richer saved uploads can restore their existing metadata; it cannot invent
