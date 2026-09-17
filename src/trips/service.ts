@@ -1,3 +1,4 @@
+import { assertNoWarmup } from "../warmup/service.js";
 import { usesPlayer } from "./playerConnection.js";
 import { preparePlayerStart, stopPlayerTrip } from "./playerRunner.js";
 import { randomUUID } from "node:crypto";
@@ -55,6 +56,7 @@ function parse<S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> {
 async function ownedDevice(tenantId: string, deviceId: string, tx: Prisma.TransactionClient = prisma): Promise<Device> {
   const device = await tx.device.findFirst({ where: { id: deviceId, tenantId } });
   if (!device) throw new HttpError(404, "Device not found");
+  await assertNoWarmup(device.id, tx);
   if (await tx.site.count({ where: { deviceId, tenantId } })) throw new HttpError(409, "A fixed client owns this phone. Driving is unavailable while it is assigned.");
   return device;
 }

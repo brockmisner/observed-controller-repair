@@ -96,16 +96,17 @@
       function setSection(section) {
         s.active = section === "sites";
         byId("sitesWorkspace").hidden = !s.active;
-        byId("devicesWorkspace").hidden = s.active;
-        document.body.dataset.workspaceSection = s.active ? "sites" : "devices";
-        byId("workspaceSectionLabel").textContent = s.active ? "Client operations" : "Device operations";
+        byId("devicesWorkspace").hidden = section !== "devices";
+        byId("warmupWorkspace").hidden = section !== "warmup";
+        document.body.dataset.workspaceSection = section;
+        byId("workspaceSectionLabel").textContent = s.active ? "Client operations" : section === "warmup" ? "Profile preparation" : "Device operations";
         document.querySelectorAll("[data-workspace-section]").forEach((button) => {
           const active = button.dataset.workspaceSection === section;
           button.classList.toggle("active", active);
           button.setAttribute("aria-pressed", String(active));
         });
         if (s.active) { ensureMap(); requestAnimationFrame(() => { s.map?.invalidateSize(); if (!s.fitted) fitMap(); }); reload().catch(() => {}); }
-        else showDevices();
+        else if (section === "devices") showDevices();
       }
 
       function ensureMap() {
@@ -456,7 +457,7 @@
         return run(`/api/site-jobs/${encodeURIComponent(form.dataset.jobId)}/resolve`, "POST", { remoteStopped: true }, "Uncertain job resolved.");
       }));
       window.addEventListener("resize", () => { if (s.active) s.map?.invalidateSize(); });
-      setSection("sites");
+      setSection("warmup");
 
       return {
         update() { s.authenticated = true; byId("siteCreate").disabled = s.busy; reload(); },

@@ -21,7 +21,8 @@
     "db:check-schemas": "node scripts/check-database-schemas.mjs",
     "prisma:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
-    "cli": "tsx src/cli/index.ts"
+    "cli": "tsx src/cli/index.ts",
+    "test:warmup": "node --import tsx scripts/test-warmup-integration.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.10.1",
@@ -47,4 +48,3 @@
     }
   }
 }
-

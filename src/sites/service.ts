@@ -1,3 +1,4 @@
+import { assertNoWarmup } from "../warmup/service.js";
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import type { Site, SiteJob, SiteResult } from "@prisma/client";
@@ -119,11 +120,13 @@ export async function createSite(tenantId: string, input: unknown) {
   return withTripLease(data.deviceId, tenantId, () => withEnvironmentWindow(data.deviceId, async () => {
     const device = await prisma.device.findFirst({ where: { id: data.deviceId, tenantId } });
     if (!device) throw new HttpError(404, "Device not found");
+    await assertNoWarmup(device.id);
     if (device.activeTripId) throw new HttpError(409, "Cancel this phone's driving trip before assigning a client");
     if (await prisma.site.findFirst({ where: { OR: [{ deviceId: device.id }, { tenantId, proxyIp: data.proxyIp }] } })) {
       throw new HttpError(409, "This phone or proxy IP already belongs to a client");
     }
     const row = await prisma.$transaction(async (tx) => {
+      await assertNoWarmup(device.id, tx);
       // Binding freezes the legacy ticker; it does not write to DuoPlus.
       const claimed = await tx.device.updateMany({ where: { id: device.id, tenantId, activeTripId: null, site: { is: null } },
         data: { active: false, anchorLat: data.lat, anchorLng: data.lng } });

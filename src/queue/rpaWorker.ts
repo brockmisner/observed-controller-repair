@@ -1,3 +1,4 @@
+import { assertNoWarmup } from "../warmup/service.js";
 import { UnrecoverableError, Worker } from "bullmq";
 import { triggerRpaTask } from "../api/duoPlusClient.js";
 import { config } from "../config.js";
@@ -28,6 +29,7 @@ export function startRpaWorker(): Worker<RpaJobData> {
       let dispatched = false;
       const currentDevice = async () => {
         const current = await prisma.device.findFirst({ where: { id: job.data.deviceId, tenantId: job.data.tenantId } });
+        if (current) await assertNoWarmup(current.id);
         if (!current || current.imageId !== job.data.imageId) throw new UnrecoverableError("RPA phone identity changed; submit a new job");
         if (await prisma.site.count({ where: { deviceId: current.id } })) throw new UnrecoverableError("A client owns this phone; legacy RPA submission is blocked");
         const now = Date.now();

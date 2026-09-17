@@ -1,3 +1,5 @@
+import { handleWarmupRequest } from "./warmup.js";
+import { assertNoWarmup } from "../warmup/service.js";
 import { savedFolders } from "../orchestrator/folders.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
@@ -260,6 +262,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     const auth = await readAuth(req);
+    if (await handleWarmupRequest(req, res, url, auth?.tenantId)) return;
     if (await handleSiteRequest(req, res, url, auth?.tenantId)) return;
     if (await handleTripRequest(req, res, url, auth?.tenantId)) return;
     if (config.authRequired && !auth && path !== "/health") {
@@ -499,6 +502,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         if (!Number.isFinite(distanceM) || distanceM > body.radiusM) {
           throw new HttpError(409, "The current position is outside the requested radius. Confirm the anchor or choose a larger radius.");
         }
+        await assertNoWarmup(current.id, tx);
         return tx.device.update({ where: { id: current.id }, data: { movementRadiusM: body.radiusM } });
       }));
       send(res, 200, { device });
@@ -584,6 +588,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         const current = await prisma.device.findUniqueOrThrow({ where: { id: existing.id } });
         if (await prisma.site.count({ where: { deviceId: current.id } })) throw new HttpError(409, "A client owns this phone; legacy drift cannot be enabled");
         if (current.activeTripId) throw new HttpError(409, "Use the Driving pause, resume or cancel controls for this device.");
+        await assertNoWarmup(current.id);
         return prisma.device.update({ where: { id: current.id, activeTripId: null }, data: { active: body.active ?? !current.active } });
       });
       send(res, 200, { device });
@@ -625,7 +630,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return;
     }
     if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
-      send(res, 409, { error: "This account or API key already exists" }); return;
+      send(res, 409, { error: req.url?.startsWith("/api/warmup") ? "That name or phone is already reserved. Refresh before trying again." : "This account or API key already exists" }); return;
     }
     logger.error({ message: err instanceof Error ? err.message : "unknown error" }, "http handler error");
     send(res, 500, { error: "Request failed. Please try again." });

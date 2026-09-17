@@ -330,3 +330,16 @@ export async function triggerRpaTask(
 export async function listCloudPhoneGroups(page: number, tenantId: string): Promise<unknown> {
   return post('/api/v1/cloudPhone/groupList', { page }, tenantId);
 }
+
+// Warmup uses only the existing image. No reset, clone, fingerprint, account, or app-data endpoints.
+export async function warmupProvider(path: 'taskList'|'userTemplateList'|'officialTemplateList'|'setTaskStatus'|'subscriptions'|'powerOn'|'powerOff', body: unknown, tenantId: string, beforeSend?:()=>Promise<void>) {
+  const endpoint=path==='subscriptions'?'/api/v1/subscriptionStartup/list':['powerOn','powerOff'].includes(path)?`/api/v1/cloudPhone/${path}`:`/api/v1/automation/${path}`;
+  return post<unknown>(endpoint,body,tenantId,beforeSend,true);
+}
+export async function applyWarmupLocation(imageId:string, lat:number,lng:number, tenantId:string, beforeSend:()=>Promise<void>) {
+  const result=await post<{success?:string[];fail?:string[]}>('/api/v1/cloudPhone/update',buildDriftPayload(imageId,lat,lng),tenantId,async()=>{
+    await beforeSend();
+    if(await prisma.device.count({where:{imageId,activeTripId:{not:null}}}))throw new HttpError(409,'A drive owns this phone; warmup location apply deferred');
+  },true);
+  if(!result?.success?.includes(imageId)||result.fail?.includes(imageId))throw new HttpError(502,'DuoPlus did not confirm warmup location acceptance');
+}

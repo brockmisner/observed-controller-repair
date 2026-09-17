@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/sites.css" />
+  <link rel="stylesheet" href="/warmup.css" />
 </head>
 <body data-view="map">
   <header class="topbar">
@@ -22,9 +23,18 @@
     </div>
   </header>
   <nav class="workspace-nav" aria-label="Workspace section">
+    <button type="button" data-workspace-section="warmup" aria-pressed="false">Warmup</button>
     <button type="button" data-workspace-section="sites" class="active" aria-pressed="true"><span class="icon" style="--icon:url('/icons/map-pin.svg')" aria-hidden="true"></span>Clients</button>
     <button type="button" data-workspace-section="devices" aria-pressed="false"><span class="icon" style="--icon:url('/icons/smartphone.svg')" aria-hidden="true"></span>Devices</button>
   </nav>
+<main id="warmupWorkspace" class="warmup-workspace" aria-label="Profile warmup" hidden>
+<div class="wu-heading"><div><p class="wu-eyebrow">One phone. One profile. Its own timeline.</p><h2>Profile warmup</h2><p class="meta">Prepare your existing phone profiles with consistent geography and daily task schedules.</p></div><div class="wu-heading-actions"><button class="btn ghost" id="warmupAddCity">Add city</button><button class="btn" id="warmupNew" disabled>New campaign</button></div></div>
+<div id="warmupFeedback" role="status" aria-live="polite" class="sites-feedback" hidden></div>
+<div id="warmupMetrics" class="wu-metrics"></div>
+<div class="wu-tools"><input id="warmupSearch" type="search" placeholder="Search phones, clients, or cities" aria-label="Search warmup campaigns" /><select id="warmupStatus" aria-label="Campaign status"><option value="all">All campaigns</option><option value="RUNNING">Running</option><option value="DRAFT">Draft</option><option value="PAUSED">Paused</option><option value="NEEDS_ATTENTION">Needs attention</option><option value="COMPLETED">Completed</option><option value="CANCELLED">Cancelled</option></select><span class="meta" id="warmupPulse"></span><button class="btn ghost" id="warmupRefresh">Refresh</button></div>
+<div class="wu-layout"><section id="warmupCards" class="wu-cards" aria-label="Warmup campaigns"><div class="wu-empty">Sign in to manage your campaigns.</div></section><aside class="wu-sidebar"><h3>Shared city data</h3><p class="meta">Import once. Reuse across phones. Profiles and timelines stay independent.</p><div id="warmupCities"></div><div class="wu-sidebar-note"><h3>Profile continuity</h3><p>Accounts, app data, cookies, and sessions stay on the existing DuoPlus image. No profile resets or cloning.</p><p class="meta">Wi-Fi changes use provider profile readback. Cell and Bluetooth records remain geographic references; Android radio playback is not available.</p></div></aside></div>
+<section id="warmupHistory" class="wu-history" hidden><h3 id="warmupHistoryTitle"></h3><p class="meta" id="warmupHistoryInfo"></p><div class="wu-env" id="warmupEnvironment"></div><div class="wu-table-wrap"><table class="wu-table"><thead><tr><th>Schedule</th><th>Task</th><th>Outcome</th><th>Details</th><th>Actions</th></tr></thead><tbody id="warmupHistoryBody"></tbody></table></div><details><summary>Campaign activity</summary><ol id="warmupEvents" class="wu-events"></ol></details></section>
+</main>
   <main id="sitesWorkspace" class="sites-workspace" aria-label="Client operations">
     <div class="sites-toolbar">
       <div class="sites-heading"><h2>Clients</h2><span class="meta" id="sitesSummary">Loading workspace...</span></div>
@@ -111,6 +121,7 @@
     </form>
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/icons.js"></script><script src="/ui-state.js"></script><script src="/map-history.js"></script><script src="/environment-explorer.js"></script><script src="/driving.js"></script><script src="/sites.js"></script><script src="/app.js"></script>
+  <script src="/icons.js"></script><script src="/ui-state.js"></script><script src="/map-history.js"></script><script src="/environment-explorer.js"></script><script src="/driving.js"></script><script src="/sites.js"></script><script src="/warmup.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -1,3 +1,4 @@
+import { assertNoWarmup } from "../warmup/service.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { Device, LocationRequest } from "@prisma/client";
 import { config } from "../config.js";
@@ -23,6 +24,7 @@ async function withIdleDevice<T>(identifier: string, tenantId: string | undefine
   const found = await findDevice(identifier, tenantId);
   return withEnvironmentWindow(found.id, async () => {
     const device = await findDevice(found.id, tenantId);
+    await assertNoWarmup(device.id);
     if (await prisma.site.count({ where: { deviceId: device.id } })) throw new HttpError(409, "This phone belongs to a client. Use the Clients workspace; legacy movement is disabled.");
     if (device.activeTripId) throw new HttpError(409, "A driving trip owns this device. Pause or cancel it through the Driving controls.");
     return work(device);
@@ -111,6 +113,7 @@ export async function registerDevice(input: RegisterDeviceInput): Promise<Device
 
   return prisma.$transaction(async (tx) => {
     const existing = await tx.device.findUnique({ where: { tenantId_imageId: { tenantId: input.tenantId, imageId: input.imageId } } });
+    if (existing) await assertNoWarmup(existing.id, tx);
     if (existing?.activeTripId) throw new HttpError(409, "Cancel the driving trip before re-registering this device");
     if (existing && await tx.site.count({ where: { deviceId: existing.id } })) throw new HttpError(409, "A client owns this phone. Its identity and anchor cannot be overwritten through registration.");
     return tx.device.upsert({

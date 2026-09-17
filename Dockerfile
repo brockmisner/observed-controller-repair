@@ -16,9 +16,9 @@ RUN npm ci --no-audit --no-fund \
 COPY tsconfig.json ./
 COPY src ./src
 COPY public ./public
-COPY scripts/start-container.mjs scripts/adb-preflight.mjs ./scripts/
+COPY scripts ./scripts/
 COPY tests ./tests
-RUN npm test && npm run build
+RUN npm test && if [ "$DATABASE_PROVIDER" = "sqlite" ]; then npm run test:warmup; fi && npm run build
 ENV NODE_ENV=production
 EXPOSE 8787
 CMD ["node", "scripts/start-container.mjs"]

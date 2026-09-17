@@ -87,6 +87,7 @@ const sites = window.ObservatorySites?.create({
   api, icon, openModal, closeModal,
   showDevices: () => setMobileView(document.body.dataset.view || "map"),
 });
+const warmup = window.ObservatoryWarmup?.create({ api, openModal, closeModal });
 map.on("moveend", () => {
   const c = map.getCenter();
   localStorage.setItem("obs-map", JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
@@ -165,6 +166,7 @@ function openModal(id) {
   document.querySelector(".topbar").inert = true;
   document.querySelector(".shell").inert = true;
   if ($("sitesWorkspace")) $("sitesWorkspace").inert = true;
+  if ($("warmupWorkspace")) $("warmupWorkspace").inert = true;
   document.querySelector(".workspace-nav")?.setAttribute("inert", "");
   if ($("mobileNav")) $("mobileNav").inert = true;
   $(id).querySelector("input:not([disabled]), button:not([disabled])")?.focus();
@@ -176,6 +178,7 @@ function closeModal(id) {
   document.querySelector(".topbar").inert = modalOpen;
   document.querySelector(".shell").inert = modalOpen;
   if ($("sitesWorkspace")) $("sitesWorkspace").inert = modalOpen;
+  if ($("warmupWorkspace")) $("warmupWorkspace").inert = modalOpen;
   const workspaceNav = document.querySelector(".workspace-nav");
   if (workspaceNav) workspaceNav.inert = modalOpen;
   if ($("mobileNav")) $("mobileNav").inert = modalOpen;
@@ -183,6 +186,7 @@ function closeModal(id) {
 
 function clearWorkspace() {
   sites?.clear();
+  warmup?.clear();
   environmentExplorer?.clear();
   driving?.clear();
   state.sessionVersion += 1;
@@ -1780,6 +1784,7 @@ async function load() {
   historyPreferences(snap);
   updateHistoryControls();
   sites?.update();
+  warmup?.update();
   $("workspaceName").textContent = snap.user?.tenantName || "Workspace";
   $("btnLogout").hidden = !snap.user;
   if (!snap.devices.some((device) => device.id === state.selectedId)) state.selectedId = snap.devices[0]?.id || null;

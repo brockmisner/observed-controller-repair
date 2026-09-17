@@ -34,6 +34,7 @@ export function gpsEligibility(tenantId: string, ids: string[], now = new Date()
     id: { in: ids }, tenantId, ...(siteId ? {} : { active: true }), poweredOn: true, duoPlusStatus: 1,
     site: siteId ? { is: { id: siteId, tenantId } } : { is: null },
     activeTripId: tripId ?? null,
+    warmupCampaigns: { none: { reservedImageId: { not: null } } },
     phase: { not: "EXPIRED" }, campaignEnd: { gt: now },
     lastPowerSyncAt: { gte: new Date(now.getTime() - config.powerStatusMaxAgeMs), lte: now },
   };

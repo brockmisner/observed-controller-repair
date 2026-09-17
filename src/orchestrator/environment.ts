@@ -1,3 +1,4 @@
+import { assertNoWarmup } from "../warmup/service.js";
 import { randomUUID } from "node:crypto";
 import type { Device, DeviceEnvironment } from "@prisma/client";
 import { z } from "zod";
@@ -104,6 +105,7 @@ export function environmentView(row: DeviceEnvironment | null, device?: Pick<Dev
 async function ownDevice(deviceId: string, tenantId: string): Promise<Device> {
   const device = await prisma.device.findFirst({ where: { id: deviceId, tenantId } });
   if (!device) throw new HttpError(404, "Device not found");
+  await assertNoWarmup(device.id);
   if (await prisma.site.count({ where: { deviceId, tenantId } })) throw new HttpError(409, "Use the Clients profile workflow for this phone");
   return device;
 }

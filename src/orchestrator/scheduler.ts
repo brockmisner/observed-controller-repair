@@ -19,6 +19,7 @@ async function runTick(): Promise<void> {
         phase: "NAVIGATING",
         activeTripId: null,
         site: { is: null },
+        warmupCampaigns: { none: { status: { in: ["DRAFT", "RUNNING", "PAUSED", "NEEDS_ATTENTION"] } } },
         poweredOn: true,
         duoPlusStatus: 1,
         lastPowerSyncAt: { gte: new Date(Date.now() - config.powerStatusMaxAgeMs), lte: new Date() },

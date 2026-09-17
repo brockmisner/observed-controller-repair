@@ -13,6 +13,8 @@ datasource db {
 }
 
 model Tenant {
+  warmupCities WarmupCity[]
+  warmupCampaigns WarmupCampaign[]
   folderInventory DuoPlusFolderInventory?
   id        String      @id
   name      String
@@ -78,6 +80,7 @@ model TenantKey {
 }
 
 model Device {
+  warmupCampaigns WarmupCampaign[]
   id               String    @id
   tenantId         String
   tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -434,4 +437,96 @@ model DuoPlusFolderInventory {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   payloadJson String
   syncedAt DateTime
+}
+
+model WarmupCity {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name String
+  timezone String
+  lat Float
+  lng Float
+  radiusM Int
+  recordsJson String @default("[]")
+  revision Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  campaigns WarmupCampaign[]
+  @@unique([tenantId, name])
+}
+
+model WarmupCampaign {
+  reservedImageId String? @unique
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deviceId String
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  cityId String
+  city WarmupCity @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  imageId String
+  name String
+  clientFolder String
+  folderId String?
+  profileLabel String
+  startDate String
+  durationDays Int
+  timezone String
+  providerTimezone String
+  lat Float
+  lng Float
+  wifiMode String @default("PRESERVE")
+  autoPower Boolean @default(false)
+  powerOwned Boolean @default(false)
+  powerRequestedAt DateTime?
+  scheduleJson String
+  profileBaselineJson String?
+  environmentJson String?
+  status String @default("DRAFT")
+  error String?
+  activatedAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  runs WarmupRun[]
+  events WarmupEvent[]
+  @@index([deviceId, status])
+  @@index([tenantId, status])
+}
+
+model WarmupRun {
+  id String @id @default(cuid())
+  campaignId String
+  campaign WarmupCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  dayNumber Int
+  slotKey String
+  scheduledAt DateTime
+  deadlineAt DateTime
+  taskJson String
+  status String @default("WAITING")
+  attempts Int @default(0)
+  providerName String @unique
+  providerTaskId String?
+  issueAt DateTime?
+  submittedAt DateTime?
+  startedAt DateTime?
+  completedAt DateTime?
+  nextCheckAt DateTime?
+  evidenceJson String?
+  error String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([campaignId, dayNumber, slotKey])
+  @@index([status, scheduledAt])
+}
+
+model WarmupEvent {
+  id String @id @default(cuid())
+  campaignId String
+  campaign WarmupCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  kind String
+  detail String
+  createdAt DateTime @default(now())
+  @@index([campaignId, createdAt])
 }

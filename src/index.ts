@@ -1,3 +1,4 @@
+import { recoverWarmup, startWarmupPlanner } from "./warmup/runner.js";
 import { initializePlayer } from "./trips/playerConnection.js";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   await recoverTrips();
   await initializePlayer();
   await recoverSiteWork();
+  await recoverWarmup();
   await keyPool.ensureRows();
 
   const telemetryWorker = startTelemetryWorker();
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
   const scheduler = startScheduler(400);
   const trips = startTripScheduler();
   const sites = startSitePlanner();
+  const warmup = startWarmupPlanner();
   const http = startHttpServer();
 
   const shutdown = async (signal: string) => {
@@ -50,6 +53,7 @@ async function main(): Promise<void> {
     http.close();
     await trips.stop();
     await sites.stop();
+    await warmup.stop();
     await Promise.allSettled([telemetryWorker.close(), rpaWorker.close()]);
     await redisConnection.quit();
     await prisma.$disconnect();
