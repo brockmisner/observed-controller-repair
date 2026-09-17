@@ -1,3 +1,5 @@
+import { usesPlayer } from "./playerConnection.js";
+import { stepPlayerTrip } from "./playerRunner.js";
 import type { DrivingTrip } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { applyDeviceEnvironment, getDeviceStatus } from "../api/duoPlusClient.js";
@@ -124,6 +126,9 @@ async function runStep(id: string): Promise<void> {
   }
   await withTripLease(initial.deviceId, initial.tenantId, async (lease) => {
     const trip = await prisma.drivingTrip.findUniqueOrThrow({ where: { id } });
+    if (usesPlayer(trip.imageId) && trip.status === "RUNNING") {
+      await stepPlayerTrip(trip, lease); return;
+    }
     if (trip.status === "ARRIVING") {
       try {
         const ready = await withEnvironmentWindow(trip.deviceId, () => waitForTripPhone(trip,

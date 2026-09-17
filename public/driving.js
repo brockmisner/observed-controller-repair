@@ -54,10 +54,10 @@
     const useReadback = runtimePoint && (!point(observed) || Date.parse(readback.checkedAt) >= Date.parse(observed.capturedAt));
     return {
       requested: point(trip?.requestedCoordinates) || point(telemetry),
-      accepted: point(trip?.acceptedCoordinates) || point(accepted),
+      accepted: trip?.playbackMode === "DEVICE_PLAYER" ? point({ lat: trip.acceptedLat, lng: trip.acceptedLng }) : point(trip?.acceptedCoordinates) || point(accepted),
       observed: useReadback ? runtimePoint : point(observed),
       requestedAt: telemetry?.requestedAt,
-      acceptedAt: accepted?.acceptedAt,
+      acceptedAt: trip?.playbackMode === "DEVICE_PLAYER" ? trip.phoneSync?.player?.checkedAt : accepted?.acceptedAt,
       observedAt: useReadback ? readback.checkedAt : observed?.capturedAt,
       observedSource: useReadback ? `Runtime readback${readback.provider ? ` (${readback.provider})` : ""}` : ({ MANUAL_ADB: "Manual ADB", DIAGNOSTIC_APK: "Diagnostic APK" })[observed?.source] || "Android observation",
       observedAgeMs: useReadback ? readback.ageMs : observed?.fixAgeMs,
@@ -91,7 +91,7 @@
       <label id="drivingAlternativeField" class="driving-alternative" hidden>Route<select id="drivingAlternative" aria-label="Choose route alternative"></select></label>
       <section id="drivingTrip" class="driving-trip" hidden><div id="drivingTripSummary"></div><button id="drivingAdopt" type="button" class="btn ghost driving-preview" data-driving-action="adopt-anchor">${icon("map-pin")} Adopt destination as anchor</button></section>
       <section id="drivingArrival" class="driving-arrival" hidden><div class="section-heading"><h3>Arrival Wi-Fi</h3><button id="drivingArrivalPreview" type="button" class="btn ghost icon-button" data-driving-action="arrival-preview" title="Preview destination Wi-Fi" aria-label="Preview destination Wi-Fi">${icon("search")}</button></div><div id="drivingArrivalStatus" class="meta"></div><label class="driving-opt-in"><input id="drivingArrivalEnabled" type="checkbox" /> Apply selected AP on arrival</label><select id="drivingArrivalSelection" aria-label="Arrival Wi-Fi access point"><option value="">Select an access point</option></select><div id="drivingArrivalInfo" class="meta"></div><div id="drivingArrivalFeedback" class="form-message" role="status"></div></section>
-      <section id="drivingEvidence" class="driving-evidence" hidden><h3>Location evidence</h3><dl class="environment-fields"><dt>Latest request</dt><dd id="drivingRequested"></dd><dt>API accepted</dt><dd id="drivingAccepted"></dd><dt>Android observed</dt><dd id="drivingObserved"></dd></dl></section>
+      <section id="drivingEvidence" class="driving-evidence" hidden><h3>Location evidence</h3><dl class="environment-fields"><dt>Latest request</dt><dd id="drivingRequested"></dd><dt id="drivingAcceptedLabel">API accepted</dt><dd id="drivingAccepted"></dd><dt>Android observed</dt><dd id="drivingObserved"></dd></dl></section>
       <details class="driving-automation"><summary>${icon("key-round")} Trip automation</summary><div class="driving-token-create"><label>Token label<input id="drivingTokenLabel" maxlength="80" placeholder="RPA trip trigger" autocomplete="off" /></label><button id="drivingTokenCreate" type="button" class="btn ghost" data-driving-action="token-create">${icon("plus")} Create token</button></div><div id="drivingTokenOnce" hidden><label>New device-scoped token<input id="drivingTokenSecret" type="password" readonly autocomplete="off" spellcheck="false" /></label><div class="actions"><button type="button" class="btn ghost icon-button" data-driving-action="token-copy" title="Copy new token" aria-label="Copy new token">${icon("copy")}</button><button type="button" class="btn ghost icon-button" data-driving-action="token-reveal" title="Show or hide token" aria-label="Show or hide token">${icon("eye")}</button><button type="button" class="btn ghost tiny" data-driving-action="token-dismiss">Done</button></div><div class="meta">Shown once. Scoped to this device.</div></div><div class="section-heading"><h3>Saved tokens</h3><button type="button" class="btn ghost icon-button" data-driving-action="token-list" title="Refresh trip tokens" aria-label="Refresh trip tokens">${icon("refresh-cw")}</button></div><div id="drivingTokenList"></div><div id="drivingTokenFeedback" class="form-message" role="status"></div></details>`;
   }
 
@@ -217,7 +217,9 @@
       const maps = sync?.maps;
       const gps = sync?.gps;
       const mapsLabel = !sync?.enabled ? "Not requested" : ({ PENDING: "Waiting to open Maps", OPENING: "Opening Maps", LAUNCH_ACCEPTED: "Maps launch accepted", FAILED: "Maps launch failed", UNKNOWN: "Maps launch unconfirmed" })[maps?.status] || "Maps launch unconfirmed";
-      const gpsLabel = ({ PENDING: "Phone GPS check pending", MATCH: "Phone GPS matches checked request", WAITING: "Waiting for phone GPS match", UNAVAILABLE: "Phone GPS readback unavailable" })[gps?.status] || (sync?.enabled ? "Phone GPS check pending" : "Not requested");
+      let gpsLabel = ({ PENDING: "Phone GPS check pending", MATCH: "Phone GPS matches checked request", WAITING: "Waiting for phone GPS match", UNAVAILABLE: "Phone GPS readback unavailable" })[gps?.status] || (sync?.enabled ? "Phone GPS check pending" : "Not requested");
+      const player = sync?.player;
+      if (player) gpsLabel = `DuoMove ${player.status?.state || "connecting"} · Applied ${player.status?.applied_seq ?? "—"} · Framework ${player.status?.framework_observed_seq ?? "—"} · Fused ${player.status?.fused_observed_seq ?? "—"} (player readback)`;
       for (const [id, label, state] of [["drivingMapsStatus", mapsLabel, maps], ["drivingGpsStatus", gpsLabel, gps]]) {
         html(id, `${escape(label)}${state?.reason ? `<span class="meta">${escape(state.reason)}</span>` : ""}${state?.checkedAt ? `<span class="meta">Checked ${escape(timestamp(state.checkedAt))}</span>` : ""}`);
         $(id)?.classList.toggle("error", state?.status === "FAILED");
@@ -257,7 +259,7 @@
       text("drivingOrigin", coordinates(originPoint));
       text("drivingOriginSource", "Controller position");
       text("drivingConfig", configError || (!config ? "Loading driving settings..." : !configured ? "Routing is unavailable." :
-        config.playbackMode === "REST_CHECKPOINTS" ? "Trip timing is an estimate. Playback waits for phone checks; continuous 1 Hz playback is not connected." : ""));
+        current.imageId === config.playerImageId ? "Device-side 1 Hz playback · Estimated road timing · Synthetic location" : config.playbackMode === "REST_CHECKPOINTS" ? "Trip timing is an estimate. Playback waits for phone checks; continuous 1 Hz playback is not connected." : ""));
       hidden("drivingConfig", Boolean(configured && !configError && config.playbackMode !== "REST_CHECKPOINTS"));
       hidden("drivingConfigRetry", !configError && config?.configured !== false);
       disabled("drivingConfigRetry", configPending);
@@ -298,7 +300,7 @@
       $("drivingTripError")?.classList.toggle("warn", waiting);
       hidden("drivingActionBar", !trip || ["ARRIVED", "CANCELLED", "FAILED"].includes(trip.status));
       hidden("drivingTripProgress", !trip);
-      hidden("drivingArrival", !trip);
+      hidden("drivingArrival", !trip || trip.playbackMode === "DEVICE_PLAYER");
       hidden("drivingEvidence", !trip);
       hidden("drivingAlternativeField", !trip || (trip.alternatives || []).length < 2);
       if (trip) {
@@ -311,10 +313,11 @@
         html("drivingTripSummary", `<div class="section-heading"><h3>${waiting ? "Waiting for provider" : statusName(trip.status)}</h3><span class="status-chip ${waiting ? "warn" : trip.status === "RUNNING" ? "good" : "neutral"}">${Number(trip.options?.timeScale || 1)}x ${Number(trip.options?.timeScale || 1) > 1 ? "accelerated" : "real time"}</span></div><div class="driving-route-metrics"><div><b>${Number.isFinite(trip.route?.distanceM) ? (trip.route.distanceM / 1609.344).toFixed(1) : "?"}</b><span>miles</span></div><div><b>${duration(trip.route?.durationMs)}</b><span>estimated ETA</span></div><div><b>${duration(trip.totalDurationMs)}</b><span>modeled trip</span></div></div><dl class="environment-fields"><dt>Destination</dt><dd>${escape(coordinates(trip.route?.destination))}</dd><dt>Traffic</dt><dd>Unavailable</dd><dt>Route fetched</dt><dd>${escape(timestamp(trip.route?.fetchedAt))}</dd><dt>Preview expires</dt><dd>${escape(timestamp(trip.route?.expiresAt))}</dd></dl>`);
         field("drivingProgress", percent);
         text("drivingProgressLabel", `${distance(trip.progressM || 0)} / ${distance(trip.route?.distanceM)} · ${percentLabel}%`);
+        text("drivingAcceptedLabel", trip.playbackMode === "DEVICE_PLAYER" ? "Player applied" : "API accepted");
         const data = evidence(trip);
-        text("drivingProgressAccepted", `Last API accepted: ${timestamp(data.acceptedAt)} · ${elapsed(trip.elapsedMs || 0)} modeled`);
+        text("drivingProgressAccepted", trip.playbackMode === "DEVICE_PLAYER" ? `Player checked: ${timestamp(trip.phoneSync?.player?.checkedAt)} · ${elapsed(trip.elapsedMs || 0)} played · Maps observation not verified` : `Last API accepted: ${timestamp(data.acceptedAt)} · ${elapsed(trip.elapsedMs || 0)} modeled`);
         for (const [name, statuses] of [["Start", ["PREVIEW"]], ["Pause", ["RUNNING"]], ["Resume", ["PAUSED"]], ["Cancel", ["PREVIEW", "RUNNING", "PAUSED", "ARRIVING"]], ["Adopt", ["ARRIVED"]]]) {
-          hidden(`driving${name}`, !statuses.includes(trip.status));
+          hidden(`driving${name}`, !statuses.includes(trip.status) || name === "Adopt" && trip.playbackMode === "DEVICE_PLAYER");
           disabled(`driving${name}`, Boolean(value.pending || value.arrivalPending || (name === "Start" && (dirty || expired))));
         }
         renderArrival(value);

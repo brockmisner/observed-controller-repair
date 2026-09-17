@@ -1,3 +1,5 @@
+import { usesPlayer } from "./playerConnection.js";
+import { preparePlayerStart, stopPlayerTrip } from "./playerRunner.js";
 import { randomUUID } from "node:crypto";
 import type { Device, DrivingTrip, Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -137,7 +139,7 @@ async function serializeTrip(row: DrivingTrip) {
   const route = routeFrom(row);
   const alternatives = alternativesFrom(row);
   return {
-    ...publicRow, route, alternatives, routeIndex: Math.max(0, alternatives.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(route))), options: optionsFrom(row),
+    ...publicRow, playbackMode: usesPlayer(row.imageId) ? "DEVICE_PLAYER" : "REST_CHECKPOINTS", route, alternatives, routeIndex: Math.max(0, alternatives.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(route))), options: optionsFrom(row),
     baseline: jsonObject(baselineJson), arrivalWifi: jsonObject(arrivalWifiJson) ?? { enabled: false, status: "DISABLED", error: null },
     phoneSync: jsonObject(phoneSyncJson) ?? { enabled: false },
     arrivalRpa: null, totalDurationMs: row.durationMs,
@@ -253,6 +255,7 @@ export async function startTrip(tenantId: string, id: string, revision: string) 
     requireFreshPreview(route);
     if (device.activeTripId) throw new HttpError(409, "This device already has an active trip.");
     requireStartPosition(device, row, route);
+    await preparePlayerStart(row);
     const baseline = await freshBaseline(device);
     await lease.assertOwned();
     await prisma.$transaction(async (tx) => {
@@ -271,6 +274,7 @@ export async function startTrip(tenantId: string, id: string, revision: string) 
 export async function pauseTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["RUNNING", "ARRIVING", "PAUSED"]);
+    if (usesPlayer(row.imageId)) await stopPlayerTrip(row);
     if (device.activeTripId !== row.id) throw new HttpError(409, "The device no longer owns this trip.");
     await lease.assertOwned();
     await prisma.$transaction(async (tx) => {
@@ -282,13 +286,18 @@ export async function pauseTrip(tenantId: string, id: string, revision: string) 
 export async function resumeTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["PAUSED"]);
+    if (usesPlayer(row.imageId)) {
+      await stopPlayerTrip(row);
+      await preparePlayerStart(row);
+    }
     if (device.activeTripId !== row.id) throw new HttpError(409, "The device no longer owns this trip.");
     if ((row.pendingElapsedMs !== null || row.pendingProgressM !== null) && !await readRetryableCheckpoint(row)) {
       throw new HttpError(409, "A prior GPS dispatch is unconfirmed or cannot be safely retried. Cancel this trip and prepare a new preview before driving.");
     }
     routeFrom(row); optionsFrom(row);
     await freshBaseline(device);
-    const phoneSync = phoneSyncState(row);
+    const phoneSync = { ...JSON.parse(row.phoneSyncJson || "{}"), ...phoneSyncState(row) };
+    if (usesPlayer(row.imageId)) delete phoneSync.player;
     if (phoneSync.enabled) {
       if (phoneSync.maps.status !== "LAUNCH_ACCEPTED") phoneSync.maps = { status: "PENDING" };
       delete phoneSync.gps;
@@ -306,6 +315,7 @@ export async function resumeTrip(tenantId: string, id: string, revision: string)
 export async function cancelTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["PREVIEW", "RUNNING", "ARRIVING", "PAUSED", "FAILED"]);
+    if (usesPlayer(row.imageId)) await stopPlayerTrip(row);
     await lease.assertOwned();
     await prisma.$transaction(async (tx) => {
       await updateTrip(tx, row, { status: "CANCELLED", finishedAt: new Date(), nextTickAt: null, lastStepAt: null, pauseReason: null });
@@ -349,6 +359,7 @@ export async function selectTripEnvironment(tenantId: string, id: string, revisi
 export async function adoptTripAnchor(tenantId: string, id: string, revision: string, value: { resumeDrift?: boolean } = {}) {
   const input = parse(z.object({ resumeDrift: z.boolean().default(false) }).strict(), value);
   return mutate(tenantId, id, revision, async (row, device, lease) => {
+    if (usesPlayer(row.imageId)) throw new HttpError(409, "Player sessions restore normal location on completion; set a new baseline before adopting an anchor.");
     if (row.status !== "ARRIVED" || row.acceptedLat === null || row.acceptedLng === null) throw new HttpError(409, "Only an arrived trip can adopt its final anchor.");
     if (device.activeTripId && device.activeTripId !== row.id) throw new HttpError(409, "Another trip owns this device.");
     const destination = routeFrom(row).destination;

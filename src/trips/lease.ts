@@ -1,3 +1,4 @@
+import { prisma } from "../db.js";
 import { randomUUID } from "node:crypto";
 import { redisConnection } from "../queue/connection.js";
 import { HttpError } from "../http/errors.js";
@@ -19,7 +20,9 @@ export interface TripLease { assertOwned(): Promise<void> }
 
 // Compare-and-delete prevents an expired worker from releasing a newer worker's lease.
 export async function withTripLease<T>(deviceId: string, tenantId: string, work: (lease: TripLease) => Promise<T>, options: { waitMs?: number } = {}): Promise<T> {
-  const key = `observatory:trip:lease:${encodeURIComponent(tenantId)}:${encodeURIComponent(deviceId)}`;
+  const device = await prisma.device.findFirst({ where: { id: deviceId, tenantId }, select: { imageId: true } });
+  if (!device) throw new HttpError(404, "Device not found");
+  const key = `observatory:trip:physical:${encodeURIComponent(device.imageId)}`;
   const token = randomUUID();
   let lost = false;
   const acquire = async () => {

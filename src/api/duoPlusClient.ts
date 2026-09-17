@@ -1,3 +1,5 @@
+import { prisma } from "../db.js";
+import { usesPlayer } from "../trips/playerConnection.js";
 import axios, { AxiosError, type AxiosInstance } from "axios";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -193,6 +195,7 @@ export async function applyDeviceEnvironment(
     "/api/v1/cloudPhone/update", body, tenantId,
     async (key) => {
       // These checks run inside the key's reserved turn, after rate-limit waits.
+      if (usesPlayer(imageId) && await prisma.device.count({ where: { imageId, activeTripId: { not: null } } })) throw new HttpError(409, "A player trip owns this phone. Cancel it before changing its environment.");
       await beforeDispatch(false);
       const info = await requestOnKey<unknown>(key, "/api/v1/cloudPhone/info", { image_id: imageId }, tenantId);
       body.images = buildWifiApplyPayload(imageId, readDeviceWifi(info, imageId), selectedWifi).images;
@@ -212,6 +215,7 @@ export async function applyDeviceEnvironment(
 }
 
 export async function modifyDeviceParams(payload: DeviceTelemetryPayload, tenantId?: string, beforeSend?: () => Promise<void>): Promise<unknown> {
+  if (usesPlayer(payload.imageId)) throw new HttpError(409, "This phone uses DuoMove Player. Start a trip from Driving; REST GPS updates are disabled for this phone.");
   requireGpsOnly(payload);
   const body = buildDriftPayload(payload.imageId, payload.lat, payload.lng);
   return post("/api/v1/cloudPhone/update", body, tenantId, beforeSend, true);
@@ -226,7 +230,8 @@ export async function modifyDeviceBatch(
   if (payloads.length > 20) throw new HttpError(400, "DuoPlus updates support at most 20 devices per batch");
   const imageIds = new Set<string>();
   const images = payloads.map((payload) => {
-    requireGpsOnly(payload);
+    if (usesPlayer(payload.imageId)) throw new HttpError(409, "This phone uses DuoMove Player. Start a trip from Driving; REST GPS updates are disabled for this phone.");
+  requireGpsOnly(payload);
     const image = buildDriftPayload(payload.imageId, payload.lat, payload.lng).images[0]!;
     if (imageIds.has(image.image_id)) throw new HttpError(400, "DuoPlus update batches must not contain duplicate image IDs");
     imageIds.add(image.image_id);

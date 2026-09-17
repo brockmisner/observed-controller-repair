@@ -1,3 +1,4 @@
+import { initializePlayer } from "./trips/playerConnection.js";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
   await prisma.$connect();
   await recoverInterruptedEnvironments();
   await recoverTrips();
+  await initializePlayer();
   await recoverSiteWork();
   await keyPool.ensureRows();
 
