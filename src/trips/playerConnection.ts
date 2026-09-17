@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { PlayerSocket } from './playerProtocol.js';
 import { logger } from '../logger.js';
 import { readPhoneLocation, PHONE_LOCATION_COMMAND } from '../api/phoneNavigation.js';
+import { installedPlayerInfo, playerApkPath, PLAYER_PACKAGE } from '../ops/playerVerification.js';
 const exec = promisify(execFile);
 const pkg = 'net.stakeout.duomove.player';
 export const playerImage = () => process.env.DUOMOVE_IMAGE_ID || '';
@@ -77,4 +78,41 @@ export async function observePlayerPhone() {
   const startedAt = Date.now();
   const content = await adb(['-s', endpoint(), 'shell', PHONE_LOCATION_COMMAND], 2500);
   return readPhoneLocation(content, new Date(), Date.now() - startedAt);
+}
+
+let inspection: Promise<Awaited<ReturnType<typeof inspectPlayer>>> | undefined;
+/** Share concurrent checks. Status never starts, cancels, or heartbeats a route. */
+export function inspectPlayerPhone() {
+  if (!inspection) inspection = inspectPlayer().finally(() => { inspection = undefined; });
+  return inspection;
+}
+async function inspectPlayer() {
+  return withPlayer(async client => {
+    const status = await client.request({ op: 'status' });
+    const [installed, location] = await Promise.allSettled([
+      (async () => {
+        const path = playerApkPath(await adb(['-s', endpoint(), 'shell', 'pm', 'path', PLAYER_PACKAGE]));
+        const [dump, checksum] = await Promise.all([
+          adb(['-s', endpoint(), 'shell', 'dumpsys', 'package', PLAYER_PACKAGE]),
+          adb(['-s', endpoint(), 'shell', 'sha256sum', path]),
+        ]);
+        return installedPlayerInfo(dump, checksum);
+      })(),
+      observePlayerPhone(),
+    ]);
+    const sequence = (value: unknown) => Number.isInteger(value) && Number(value) >= -1 ? Number(value) : null;
+    return {
+      checkedAt: new Date().toISOString(), readOnly: true,
+      installed: installed.status === 'fulfilled' ? installed.value : null,
+      installedError: installed.status === 'rejected' ? 'Installed APK identity could not be read' : null,
+      player: { connected: true, state: status.state, cleanupOk: status.cleanup_ok,
+        appliedSequence: sequence(status.applied_seq), frameworkObservedSequence: sequence(status.framework_observed_seq),
+        fusedObservedSequence: sequence(status.fused_observed_seq),
+        synthetic: typeof status.synthetic === 'boolean' ? status.synthetic : null,
+        observationScope: status.observer_scope === 'player_app' ? 'player_app' : 'UNKNOWN' },
+      observation: location.status === 'fulfilled' ? location.value : null,
+      locationError: location.status === 'rejected' ? 'Android location readback was unavailable' : null,
+      radios: { wifi: 'NOT_OBSERVED', cell: 'NOT_OBSERVED', bluetooth: 'NOT_OBSERVED' },
+    };
+  });
 }

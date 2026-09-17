@@ -39,8 +39,10 @@ correctly observe overlapping real network identities.
 
 ## Not built / not verified
 
-This is not a completed Android integration or deployment. The live marker is not yet
-wired to these sessions. Existing movement/RPA production behavior is unchanged.
+This is not a completed Android radio integration. The live marker is not yet
+wired to radio sessions. The map can show fresh Android GPS readback separately
+from controller coordinates; see `PLAYER-VERIFICATION.md`. Existing movement/RPA
+production behavior is unchanged.
 No new plugin APK, Android radio receiver, or independent radio observer has been built.
 The existing checker-only module remains unchanged.
 
@@ -50,10 +52,12 @@ wire movement acknowledgments to radio updates and Bluetooth arrival handling, a
 validate through independent Android API readback. DuoPlus documentation describes
 package-targeted injection; global/system-service coverage cannot be assumed from that.
 
-Local ADB currently reports no connected devices. The Railway connector exposes
-variable names but redacts values, including the configured ADB endpoint. The connected
-browser is signed into Observatory, not a DuoPlus management session. No control token
-or ADB endpoint was extracted from hidden browser state.
+Direct ADB from the development workspace is unreachable. The deployed Railway
+controller recorded a successful player connection to Demo (`N5YK6`) on
+2026-09-17. The Observatory Android-location check reached the phone but returned
+a stale last fix; this does not verify its current position. The read-only player
+inspection can compare installed APK bytes with the supplied upload through the
+controller's configured ADB connection. It reports radio readback as unavailable.
 
 Existing city JSON remains compatible but lacks fields previously stripped at import.
 Reimporting richer saved uploads can restore their existing metadata; it cannot invent

@@ -89,7 +89,7 @@
         <div class="map-title"><span class="icon" style="--icon:url('/icons/map.svg')" aria-hidden="true"></span><span>Location workspace</span></div>
         <div id="explorerMapPanel" class="explorer-map-panel" hidden><div class="explorer-map-heading"><div id="explorerMapSummary"></div><button type="button" class="btn ghost icon-button" id="explorerMapFit" title="Fit observations on map" aria-label="Fit observations on map"><span class="icon" style="--icon:url('/icons/crosshair.svg')" aria-hidden="true"></span></button></div><div id="explorerMapKinds" class="explorer-map-kinds"></div></div>
         <div class="compass" id="compass" hidden><div><div class="needle" id="needle"></div><div id="pinMeters"></div></div></div>
-        <div class="map-legend"><span><i class="dot live"></i> Controller position</span><span><i class="dot anchor"></i> Anchor</span><span><i class="ring"></i> <span id="radiusLegend">Movement radius</span></span><label class="map-tog" title="Show saved model movement on the map"><input type="checkbox" id="showHistory" /><i class="line" aria-hidden="true"></i> Show history</label><button type="button" class="map-tog" id="btnClearTrails" title="Clear displayed trails for this workspace in this browser. Saved history is kept." disabled>Clear trails</button><button type="button" class="map-tog" id="btnTiles" title="Switch map layer">Streets</button><label class="map-tog"><input type="checkbox" id="onOnly" checked /> ON + selected</label><span id="historyFeedback" class="sr-only" role="status" aria-live="polite"></span></div>
+        <div class="map-legend"><span><i class="dot live"></i> Controller position</span><span><i class="dot" style="background:#8050c7"></i> Fresh Android readback</span><span><i class="dot anchor"></i> Anchor</span><span><i class="ring"></i> <span id="radiusLegend">Movement radius</span></span><label class="map-tog" title="Show saved model movement on the map"><input type="checkbox" id="showHistory" /><i class="line" aria-hidden="true"></i> Show history</label><button type="button" class="map-tog" id="btnClearTrails" title="Clear displayed trails for this workspace in this browser. Saved history is kept." disabled>Clear trails</button><button type="button" class="map-tog" id="btnTiles" title="Switch map layer">Streets</button><label class="map-tog"><input type="checkbox" id="onOnly" checked /> ON + selected</label><span id="historyFeedback" class="sr-only" role="status" aria-live="polite"></span></div>
       </div>
     </section>
     <aside class="detail" id="detail" aria-label="Device inspector"><div class="empty">Select a device.</div></aside>
@@ -132,6 +132,6 @@
   </div>
   <script src="/vendor/leaflet-1.9.4/leaflet.js"></script>
   <script src="/icons.js"></script><script src="/ui-state.js"></script><script src="/map-history.js"></script><script src="/environment-explorer.js"></script><script src="/driving.js"></script><script src="/sites.js"></script><script src="/warmup.js"></script>
-  <script src="/rpa-jobs.js"></script><script src="/polling.js"></script><script src="/app.js"></script>
+  <script src="/rpa-jobs.js"></script><script src="/polling.js"></script><script src="/phone-readback.js"></script><script src="/app.js"></script>
 </body>
 </html>
