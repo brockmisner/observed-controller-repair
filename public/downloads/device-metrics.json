@@ -1,0 +1,92 @@
+{
+  "pause_freezes_time_and_delivery": true,
+  "pause_releases_wake_lock": true,
+  "resume_via_notification": true,
+  "screen_mode": "background",
+  "screen_off_observed": false,
+  "screen_off_duration_seconds": 0,
+  "background_duration_seconds": 600,
+  "spatial_index": "sqlite_bbox_btree",
+  "timing_metrics": {
+    "delivered": 46173,
+    "skipped": 2,
+    "max_lateness_ms": 58.034944,
+    "mean_lateness_ms": 0.6515737302752688,
+    "history_evicted": 44125,
+    "channels": {
+      "gnss": {
+        "delivered": 607,
+        "skipped": 0,
+        "max_lateness_ms": 2.717236,
+        "mean_lateness_ms": 0.6232620214168044
+      },
+      "wifi": {
+        "delivered": 61,
+        "skipped": 0,
+        "max_lateness_ms": 1.124205,
+        "mean_lateness_ms": 0.5659490163934426
+      },
+      "cell": {
+        "delivered": 607,
+        "skipped": 0,
+        "max_lateness_ms": 2.717236,
+        "mean_lateness_ms": 0.6232620214168044
+      },
+      "ble": {
+        "delivered": 607,
+        "skipped": 0,
+        "max_lateness_ms": 2.717236,
+        "mean_lateness_ms": 0.6232620214168044
+      },
+      "imu": {
+        "delivered": 30334,
+        "skipped": 2,
+        "max_lateness_ms": 18.034944,
+        "mean_lateness_ms": 0.6514668293663818
+      },
+      "magnetic": {
+        "delivered": 6068,
+        "skipped": 0,
+        "max_lateness_ms": 58.034944,
+        "mean_lateness_ms": 0.660767623104812
+      },
+      "pressure": {
+        "delivered": 607,
+        "skipped": 0,
+        "max_lateness_ms": 2.717236,
+        "mean_lateness_ms": 0.6232620214168044
+      },
+      "power": {
+        "delivered": 607,
+        "skipped": 0,
+        "max_lateness_ms": 2.717236,
+        "mean_lateness_ms": 0.6232620214168044
+      },
+      "activity": {
+        "delivered": 607,
+        "skipped": 0,
+        "max_lateness_ms": 2.717236,
+        "mean_lateness_ms": 0.6232620214168044
+      },
+      "pose": {
+        "delivered": 6068,
+        "skipped": 0,
+        "max_lateness_ms": 58.034944,
+        "mean_lateness_ms": 0.660767623104812
+      }
+    }
+  },
+  "return_to_activity_state": "RUNNING",
+  "notification_stop_releases_wake_and_foreground": true,
+  "elapsed_ms": 611884,
+  "instrumentation_process_active": true,
+  "app_version": "1.3.1",
+  "apk_sha256": "1da8e6e050c38e78c0ae9a84ce24b120d65292b0c42e06f6e6242f9429492e32",
+  "report_state": "STOPPED",
+  "history_frames": 2048,
+  "process_force_stop_no_silent_resume": true,
+  "private_import_metadata_preserved": true,
+  "device": "Selected DuoPlus Pixel 6, Android 15/API 35",
+  "screen_off_verified": false,
+  "android_auto_projection_verified": false
+}

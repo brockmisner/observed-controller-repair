@@ -1,0 +1,1 @@
+ALTER TABLE "DrivingTrip" ADD COLUMN "phoneSyncJson" TEXT NOT NULL DEFAULT '{}';

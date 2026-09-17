@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#202524" />
+  <title>Observatory Controller</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/sites.css" />
+</head>
+<body data-view="map">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark icon" style="--icon:url('/icons/radio.svg')" aria-hidden="true"></span><div><h1>Observatory</h1><p id="workspaceName">Local search workspace</p></div></div>
+    <span class="workspace-label" id="workspaceSectionLabel">Client operations</span>
+    <div class="top-actions">
+      <button class="btn header-action" id="btnKeys" type="button" aria-label="Workspace API keys" title="Workspace API keys"><span class="icon" style="--icon:url('/icons/key-round.svg')" aria-hidden="true"></span><span class="action-label">API keys</span></button>
+      <button class="btn icon-button header-action" id="btnRefresh" type="button" aria-label="Refresh workspace" title="Refresh workspace"><span class="icon" style="--icon:url('/icons/refresh-cw.svg')" aria-hidden="true"></span></button>
+      <button class="btn icon-button header-action" id="btnDiagnostics" type="button" aria-label="Workspace diagnostics" title="Workspace diagnostics"><span class="icon" style="--icon:url('/icons/activity.svg')" aria-hidden="true"></span></button>
+      <button class="btn" id="btnRegister" type="button" aria-label="Add device" title="Add device"><span class="icon" style="--icon:url('/icons/plus.svg')" aria-hidden="true"></span><span class="action-label">Add device</span></button>
+      <button class="btn icon-button header-action" id="btnLogout" type="button" aria-label="Log out" title="Log out"><span class="icon" style="--icon:url('/icons/log-out.svg')" aria-hidden="true"></span></button>
+    </div>
+  </header>
+  <nav class="workspace-nav" aria-label="Workspace section">
+    <button type="button" data-workspace-section="sites" class="active" aria-pressed="true"><span class="icon" style="--icon:url('/icons/map-pin.svg')" aria-hidden="true"></span>Clients</button>
+    <button type="button" data-workspace-section="devices" aria-pressed="false"><span class="icon" style="--icon:url('/icons/smartphone.svg')" aria-hidden="true"></span>Devices</button>
+  </nav>
+  <main id="sitesWorkspace" class="sites-workspace" aria-label="Client operations">
+    <div class="sites-toolbar">
+      <div class="sites-heading"><h2>Clients</h2><span class="meta" id="sitesSummary">Loading workspace...</span></div>
+      <div class="sites-toolbar-actions"><button class="btn ghost icon-button" id="sitesReload" type="button" title="Reload clients and results" aria-label="Reload clients and results"><span class="icon" style="--icon:url('/icons/refresh-cw.svg')" aria-hidden="true"></span></button><button class="btn" id="siteCreate" type="button" disabled><span class="icon" style="--icon:url('/icons/plus.svg')" aria-hidden="true"></span>Add client</button></div>
+    </div>
+    <div id="sitesFeedback" class="sites-feedback" role="status" aria-live="polite" hidden></div>
+    <div class="sites-layout">
+      <section class="sites-records" aria-label="Clients and results">
+        <div class="sites-records-tools">
+          <div class="sites-tabs" aria-label="Client records"><button type="button" data-site-view="sites" class="active" aria-pressed="true">Clients</button><button type="button" data-site-view="results" aria-pressed="false">Results</button></div>
+          <label class="search-field" id="siteSearchLabel"><span class="icon" style="--icon:url('/icons/search.svg')" aria-hidden="true"></span><input id="siteSearch" type="search" placeholder="Search clients" aria-label="Search clients" /></label>
+          <form id="siteResultFilter" class="site-result-filter" hidden><label class="search-field"><span class="icon" style="--icon:url('/icons/search.svg')" aria-hidden="true"></span><input name="keyword" type="search" placeholder="Filter by keyword" aria-label="Result keyword" /></label><select name="app" aria-label="Result app"><option value="">All apps</option><option value="chrome">Chrome</option><option value="maps">Maps</option><option value="tracker">Tracker</option></select><button type="submit" class="btn ghost icon-button" title="Filter results" aria-label="Filter results"><span class="icon" style="--icon:url('/icons/arrow-up-right.svg')" aria-hidden="true"></span></button></form>
+        </div>
+        <div id="siteRecords" class="site-records-body"><div class="empty">Loading clients...</div></div>
+      </section>
+      <div class="sites-inspection">
+        <section class="sites-map-wrap" aria-label="Client and reported rank map"><div id="sitesMap"></div><button type="button" id="sitesMapFit" class="btn ghost icon-button sites-map-fit" title="Fit clients on map" aria-label="Fit clients on map"><span class="icon" style="--icon:url('/icons/crosshair.svg')" aria-hidden="true"></span></button><div class="sites-map-key"><span><i class="dot live"></i>Client</span><span><i class="dot site-rank-dot"></i>Reported rank</span><span><i class="dot site-unreported-dot"></i>Not reported</span></div></section>
+        <section id="siteInspector" class="site-inspector" aria-label="Client details"><div class="empty">Select a client.</div></section>
+      </div>
+    </div>
+  </main>
+  <main class="shell" id="devicesWorkspace" hidden>
+    <aside class="rail" aria-label="Device fleet">
+      <div class="rail-head">
+        <div class="section-heading"><h2>Fleet</h2><span class="meta" id="fleetCount"></span></div>
+        <label class="search-field"><span class="icon" style="--icon:url('/icons/search.svg')" aria-hidden="true"></span><input id="fleetFilter" placeholder="Search devices" aria-label="Search devices" autocomplete="off" /></label>
+        <label class="filter-field"><span class="sr-only">Fleet status</span><select id="fleetStatus"><option value="all">All devices</option><option value="on">ON devices</option><option value="attention">Needs attention</option><option value="pending">Pending setup</option></select></label>
+      </div>
+      <div id="fleetList" class="fleet-list"><div class="empty">Loading workspace...</div></div>
+      <div class="rail-footer"><span class="icon" style="--icon:url('/icons/refresh-cw.svg')" aria-hidden="true"></span><span id="fleetPollLabel">1-minute power checks</span></div>
+    </aside>
+    <section class="stage" aria-label="Location map">
+      <div class="workspace-status"><div class="kpis" id="kpis"></div><div id="connectionStatus" class="connection-status" role="status" aria-live="polite">Connecting...</div></div>
+      <div class="map-wrap">
+        <div id="map"></div>
+        <div id="drivingMapSurface" class="driving-map-surface" hidden>
+          <div class="driving-map-heading"><span class="icon" style="--icon:url('/icons/route.svg')" aria-hidden="true"></span><div><strong id="drivingMapDevice"></strong><span id="drivingMapStatus"></span></div><button type="button" class="btn ghost icon-button" data-driving-action="fit" title="Fit driving route" aria-label="Fit driving route"><span class="icon" style="--icon:url('/icons/crosshair.svg')" aria-hidden="true"></span></button></div>
+          <div id="drivingMapLegend" class="driving-map-legend" hidden><span><i class="line"></i>Driving route</span><strong id="drivingMapRoute"></strong><span>Traffic unavailable</span></div>
+        </div>
+        <div class="map-title"><span class="icon" style="--icon:url('/icons/map.svg')" aria-hidden="true"></span><span>Location workspace</span></div>
+        <div id="explorerMapPanel" class="explorer-map-panel" hidden><div class="explorer-map-heading"><div id="explorerMapSummary"></div><button type="button" class="btn ghost icon-button" id="explorerMapFit" title="Fit observations on map" aria-label="Fit observations on map"><span class="icon" style="--icon:url('/icons/crosshair.svg')" aria-hidden="true"></span></button></div><div id="explorerMapKinds" class="explorer-map-kinds"></div></div>
+        <div class="compass" id="compass" hidden><div><div class="needle" id="needle"></div><div id="pinMeters"></div></div></div>
+        <div class="map-legend"><span><i class="dot live"></i> Controller position</span><span><i class="dot anchor"></i> Anchor</span><span><i class="ring"></i> <span id="radiusLegend">Movement radius</span></span><label class="map-tog" title="Show saved model movement on the map"><input type="checkbox" id="showHistory" /><i class="line" aria-hidden="true"></i> Show history</label><button type="button" class="map-tog" id="btnClearTrails" title="Clear displayed trails for this workspace in this browser. Saved history is kept." disabled>Clear trails</button><button type="button" class="map-tog" id="btnTiles" title="Switch map layer">Streets</button><label class="map-tog"><input type="checkbox" id="onOnly" checked /> ON + selected</label><span id="historyFeedback" class="sr-only" role="status" aria-live="polite"></span></div>
+      </div>
+    </section>
+    <aside class="detail" id="detail" aria-label="Device inspector"><div class="empty">Select a device.</div></aside>
+    <nav id="mobileNav" class="mobile-nav" aria-label="Workspace view"><button type="button" data-mobile-view="fleet" aria-pressed="false"><span class="icon" style="--icon:url('/icons/list.svg')" aria-hidden="true"></span>Fleet</button><button type="button" data-mobile-view="map" aria-pressed="true" class="active"><span class="icon" style="--icon:url('/icons/map.svg')" aria-hidden="true"></span>Map</button><button type="button" data-mobile-view="device" aria-pressed="false"><span class="icon" style="--icon:url('/icons/smartphone.svg')" aria-hidden="true"></span>Device</button></nav>
+  </main>
+  <div class="modal" id="diagnosticsModal" role="dialog" aria-modal="true" aria-labelledby="diagnosticsTitle" hidden>
+    <div class="modal-card diagnostics-card">
+      <div class="modal-heading"><div><span class="eyebrow">Workspace</span><h2 id="diagnosticsTitle">Diagnostics</h2></div><button type="button" class="btn ghost icon-button" id="btnCloseDiagnostics" aria-label="Close diagnostics" title="Close diagnostics"><span class="icon" style="--icon:url('/icons/x.svg')" aria-hidden="true"></span></button></div>
+      <section class="diagnostic-section"><h3>Controller activity</h3><div id="opsSession" class="ops-body"></div></section>
+      <section class="diagnostic-section"><h3>DuoPlus credentials</h3><div id="keyTable" class="table"></div></section>
+      <section class="diagnostic-section"><h3>Automation submissions</h3><div id="rpaTable" class="table"></div></section>
+    </div>
+  </div>
+  <div class="modal" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginTitle" hidden>
+    <form class="modal-card" id="loginForm">
+      <div class="auth-brand"><span class="icon" style="--icon:url('/icons/radio.svg')" aria-hidden="true"></span>Observatory</div>
+      <h2 id="loginTitle">Workspace login</h2>
+      <div class="auth-modes" aria-label="Account access"><button type="button" class="auth-mode active" id="btnLoginMode" aria-pressed="true">Log in</button><button type="button" class="auth-mode" id="btnSignupMode" aria-pressed="false" hidden>Create workspace</button></div>
+      <div class="grid2"><label class="span2">Email<input name="email" type="email" required autocomplete="username" maxlength="254" /></label><label class="span2">Password<input name="password" type="password" required autocomplete="current-password" maxlength="128" /></label><label class="span2" id="workspaceField" hidden>Workspace name<input name="workspace" placeholder="Acme Local" maxlength="100" autocomplete="organization" /></label></div>
+      <div id="loginError" class="form-message error" role="alert" hidden></div>
+      <div class="modal-actions"><button type="submit" class="btn" id="btnLoginSubmit">Log in</button></div>
+    </form>
+  </div>
+  <div class="modal" id="keysModal" role="dialog" aria-modal="true" aria-labelledby="keysTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-heading"><div><span class="eyebrow">Connections</span><h2 id="keysTitle">Workspace API keys</h2></div><button type="button" class="btn ghost icon-button" id="btnCloseKeys" aria-label="Close API keys" title="Close API keys"><span class="icon" style="--icon:url('/icons/x.svg')" aria-hidden="true"></span></button></div>
+      <p class="meta" id="keysWorkspace"></p>
+      <section class="credential-section" aria-labelledby="duoKeysTitle"><div class="credential-heading"><h3 id="duoKeysTitle">DuoPlus</h3><span class="meta">Managed request queue</span></div><div id="keysList" class="credential-list"></div><form id="addKeyForm" autocomplete="off"><div class="grid2"><label>API key<input name="key" type="password" required autocomplete="off" spellcheck="false" autocapitalize="none" /></label><label>Label<input name="label" placeholder="Production" maxlength="100" /></label></div><div id="duoKeyMessage" class="form-message" role="status" aria-live="polite" hidden></div><div class="modal-actions"><button type="submit" class="btn" id="btnSaveDuoKey">Save DuoPlus key</button></div></form></section>
+      <section class="credential-section" aria-labelledby="wigleKeysTitle"><div class="credential-heading"><h3 id="wigleKeysTitle">WiGLE</h3><span class="meta" id="wigleStatus">Not connected</span></div><div id="wigleCredential" class="credential-list"></div><form id="wigleKeyForm" autocomplete="off"><div class="grid2"><label>API name<input name="apiName" required autocomplete="off" spellcheck="false" autocapitalize="none" /></label><label>API token<input name="apiToken" type="password" required autocomplete="off" spellcheck="false" autocapitalize="none" /></label></div><div id="wigleKeyMessage" class="form-message" role="status" aria-live="polite" hidden></div><div class="modal-actions"><button type="submit" class="btn" id="btnSaveWigleKey">Save WiGLE credentials</button></div></form></section>
+    </div>
+  </div>
+  <div class="modal" id="registerModal" role="dialog" aria-modal="true" aria-labelledby="registerTitle" hidden>
+    <form class="modal-card" id="registerForm">
+      <div class="modal-heading"><div><span class="eyebrow">Controller registration</span><h2 id="registerTitle">Add device</h2></div><button type="button" class="btn ghost icon-button" id="btnCancelReg" aria-label="Cancel registration" title="Cancel registration"><span class="icon" style="--icon:url('/icons/x.svg')" aria-hidden="true"></span></button></div>
+      <div class="grid2"><label class="span2">DuoPlus device ID<input name="imageId" required maxlength="200" /></label><label class="span2">Display name<input name="name" placeholder="Downtown workspace" maxlength="200" /></label><label>Anchor latitude<input name="anchorLat" type="number" step="any" min="-90" max="90" required /></label><label>Anchor longitude<input name="anchorLng" type="number" step="any" min="-180" max="180" required /></label><label>Campaign days<input name="campaignDays" type="number" min="1" max="3650" value="30" required /></label></div>
+      <div hidden><input type="checkbox" name="lookupWigle" /><input name="wifiSsid" /><input name="wifiBssid" /><input name="carrier" value="" /><input name="groundElevationM" value="20" /><input name="timezone" value="America/New_York" /><button type="button" id="btnPreviewWigle">Preview WiGLE</button></div>
+      <div id="wiglePreview" hidden></div><div id="registerFeedback" class="form-message" role="status" aria-live="polite" hidden></div>
+      <div class="modal-actions"><button type="submit" class="btn">Register device</button></div>
+    </form>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/icons.js"></script><script src="/ui-state.js"></script><script src="/map-history.js"></script><script src="/environment-explorer.js"></script><script src="/driving.js"></script><script src="/sites.js"></script><script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,683 @@
+{
+  "schema": "hooking.scenario",
+  "version": 1,
+  "simulated": true,
+  "name": "Eleven-minute multisensor example",
+  "seed": 42,
+  "utc_origin_ms": 1767268800000,
+  "trajectory": [
+    {
+      "t_ms": 0,
+      "lat": 40.766403,
+      "lon": -73.97,
+      "alt_msl_m": 25.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 60000,
+      "lat": 40.77,
+      "lon": -73.97,
+      "alt_msl_m": 25.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 120000,
+      "lat": 40.77,
+      "lon": -73.96525,
+      "alt_msl_m": 26.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 180000,
+      "lat": 40.773597,
+      "lon": -73.96525,
+      "alt_msl_m": 29.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 240000,
+      "lat": 40.773597,
+      "lon": -73.97,
+      "alt_msl_m": 27.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 300000,
+      "lat": 40.77,
+      "lon": -73.97,
+      "alt_msl_m": 25.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 360000,
+      "lat": 40.77,
+      "lon": -73.97,
+      "alt_msl_m": 25.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 420000,
+      "lat": 40.77,
+      "lon": -73.96905,
+      "alt_msl_m": 25.4,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 480000,
+      "lat": 40.770719,
+      "lon": -73.96905,
+      "alt_msl_m": 26.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 540000,
+      "lat": 40.770719,
+      "lon": -73.97,
+      "alt_msl_m": 25.4,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 600000,
+      "lat": 40.77,
+      "lon": -73.97,
+      "alt_msl_m": 25.0,
+      "geoid_sep_m": 0.0
+    },
+    {
+      "t_ms": 660000,
+      "lat": 40.77,
+      "lon": -73.97,
+      "alt_msl_m": 25.0,
+      "geoid_sep_m": 0.0
+    }
+  ],
+  "altitude_provenance": "All route coordinates, MSL heights and geoid separation are explicit example fixtures, not measurements. Route heights declared msl; constant geoid separation 0 m (supplied). No geoid model is implied.",
+  "catalog": {
+    "source": "Explicit example fixtures; no survey imported",
+    "complete": false,
+    "observed_at": null,
+    "records": [
+      {
+        "kind": "wifi",
+        "id": "example-wifi-1",
+        "lat": 40.77,
+        "lon": -73.97,
+        "fields": {
+          "ssid": "PROBE EXAMPLE WIFI",
+          "frequency_mhz": 2412,
+          "channel": 1,
+          "reference_rssi_dbm": -45,
+          "path_loss_exponent": 2.2
+        },
+        "provenance": {
+          "id": "example",
+          "lat": "example",
+          "lon": "example",
+          "ssid": "example",
+          "frequency_mhz": "example",
+          "channel": "example",
+          "reference_rssi_dbm": "example",
+          "path_loss_exponent": "example"
+        }
+      },
+      {
+        "kind": "cell",
+        "id": "example-cell-1",
+        "lat": 40.77,
+        "lon": -73.97,
+        "fields": {
+          "technology": "LTE",
+          "frequency_mhz": 1900,
+          "reference_rssi_dbm": -70,
+          "path_loss_exponent": 3.0
+        },
+        "provenance": {
+          "id": "example",
+          "lat": "example",
+          "lon": "example",
+          "technology": "example",
+          "frequency_mhz": "example",
+          "reference_rssi_dbm": "example",
+          "path_loss_exponent": "example"
+        }
+      },
+      {
+        "kind": "ble",
+        "id": "example-ble-1",
+        "lat": 40.77,
+        "lon": -73.97,
+        "fields": {
+          "name": "PROBE EXAMPLE BEACON",
+          "frequency_mhz": 2402,
+          "reference_rssi_dbm": -55,
+          "path_loss_exponent": 2.0
+        },
+        "provenance": {
+          "id": "example",
+          "lat": "example",
+          "lon": "example",
+          "name": "example",
+          "frequency_mhz": "example",
+          "reference_rssi_dbm": "example",
+          "path_loss_exponent": "example"
+        }
+      }
+    ]
+  },
+  "profiles": {
+    "mount": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      -1,
+      0
+    ],
+    "magnetic_enu_ut": [
+      3,
+      20,
+      -40
+    ],
+    "noise": false,
+    "qnh_hpa": 1013.25,
+    "rates_hz": {
+      "gnss": 1,
+      "wifi": 0.1,
+      "cell": 1,
+      "ble": 1,
+      "imu": 50,
+      "magnetic": 10,
+      "pressure": 1,
+      "power": 1,
+      "activity": 1
+    }
+  },
+  "events": {
+    "fix": [
+      {
+        "t_ms": 0,
+        "valid": true
+      },
+      {
+        "t_ms": 150000,
+        "valid": false
+      },
+      {
+        "t_ms": 180000,
+        "valid": true
+      },
+      {
+        "t_ms": 470000,
+        "valid": false
+      },
+      {
+        "t_ms": 490000,
+        "valid": true
+      }
+    ],
+    "activity": [
+      {
+        "t_ms": 0,
+        "type": "IN_VEHICLE",
+        "cadence_hz": 0
+      },
+      {
+        "t_ms": 60000,
+        "type": "IN_VEHICLE",
+        "cadence_hz": 0
+      },
+      {
+        "t_ms": 300000,
+        "type": "STILL",
+        "cadence_hz": 0
+      },
+      {
+        "t_ms": 360000,
+        "type": "WALKING",
+        "cadence_hz": 1.8
+      },
+      {
+        "t_ms": 600000,
+        "type": "STILL",
+        "cadence_hz": 0
+      }
+    ],
+    "power": [
+      {
+        "t_ms": 0,
+        "battery_pct": 80,
+        "charging": false,
+        "thermal_status": "NONE"
+      },
+      {
+        "t_ms": 180000,
+        "battery_pct": 79,
+        "charging": false,
+        "thermal_status": "LIGHT"
+      },
+      {
+        "t_ms": 300000,
+        "battery_pct": 78,
+        "charging": true,
+        "thermal_status": "LIGHT"
+      },
+      {
+        "t_ms": 600000,
+        "battery_pct": 83,
+        "charging": true,
+        "thermal_status": "NONE"
+      }
+    ],
+    "gnss": [
+      {
+        "t_ms": 0,
+        "satellites": [
+          {
+            "constellation": "GPS",
+            "svid": 1,
+            "cn0_dbhz": 32.0,
+            "elevation_deg": 20.0,
+            "azimuth_deg": 0.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 2,
+            "cn0_dbhz": 33.0,
+            "elevation_deg": 30.0,
+            "azimuth_deg": 60.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 3,
+            "cn0_dbhz": 34.0,
+            "elevation_deg": 40.0,
+            "azimuth_deg": 120.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 4,
+            "cn0_dbhz": 35.0,
+            "elevation_deg": 50.0,
+            "azimuth_deg": 180.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 5,
+            "cn0_dbhz": 36.0,
+            "elevation_deg": 60.0,
+            "azimuth_deg": 240.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 6,
+            "cn0_dbhz": 37.0,
+            "elevation_deg": 70.0,
+            "azimuth_deg": 300.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          }
+        ]
+      },
+      {
+        "t_ms": 150000,
+        "satellites": [
+          {
+            "constellation": "GPS",
+            "svid": 1,
+            "cn0_dbhz": 32.0,
+            "elevation_deg": 20.0,
+            "azimuth_deg": 0.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 2,
+            "cn0_dbhz": 33.0,
+            "elevation_deg": 30.0,
+            "azimuth_deg": 60.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 3,
+            "cn0_dbhz": 34.0,
+            "elevation_deg": 40.0,
+            "azimuth_deg": 120.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 4,
+            "cn0_dbhz": 35.0,
+            "elevation_deg": 50.0,
+            "azimuth_deg": 180.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 5,
+            "cn0_dbhz": 36.0,
+            "elevation_deg": 60.0,
+            "azimuth_deg": 240.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 6,
+            "cn0_dbhz": 37.0,
+            "elevation_deg": 70.0,
+            "azimuth_deg": 300.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          }
+        ]
+      },
+      {
+        "t_ms": 180000,
+        "satellites": [
+          {
+            "constellation": "GPS",
+            "svid": 1,
+            "cn0_dbhz": 32.0,
+            "elevation_deg": 20.0,
+            "azimuth_deg": 0.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 2,
+            "cn0_dbhz": 33.0,
+            "elevation_deg": 30.0,
+            "azimuth_deg": 60.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 3,
+            "cn0_dbhz": 34.0,
+            "elevation_deg": 40.0,
+            "azimuth_deg": 120.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 4,
+            "cn0_dbhz": 35.0,
+            "elevation_deg": 50.0,
+            "azimuth_deg": 180.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 5,
+            "cn0_dbhz": 36.0,
+            "elevation_deg": 60.0,
+            "azimuth_deg": 240.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 6,
+            "cn0_dbhz": 37.0,
+            "elevation_deg": 70.0,
+            "azimuth_deg": 300.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          }
+        ]
+      },
+      {
+        "t_ms": 470000,
+        "satellites": [
+          {
+            "constellation": "GPS",
+            "svid": 1,
+            "cn0_dbhz": 32.0,
+            "elevation_deg": 20.0,
+            "azimuth_deg": 0.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 2,
+            "cn0_dbhz": 33.0,
+            "elevation_deg": 30.0,
+            "azimuth_deg": 60.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 3,
+            "cn0_dbhz": 34.0,
+            "elevation_deg": 40.0,
+            "azimuth_deg": 120.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 4,
+            "cn0_dbhz": 35.0,
+            "elevation_deg": 50.0,
+            "azimuth_deg": 180.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 5,
+            "cn0_dbhz": 36.0,
+            "elevation_deg": 60.0,
+            "azimuth_deg": 240.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 6,
+            "cn0_dbhz": 37.0,
+            "elevation_deg": 70.0,
+            "azimuth_deg": 300.0,
+            "used_in_fix": false,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          }
+        ]
+      },
+      {
+        "t_ms": 490000,
+        "satellites": [
+          {
+            "constellation": "GPS",
+            "svid": 1,
+            "cn0_dbhz": 32.0,
+            "elevation_deg": 20.0,
+            "azimuth_deg": 0.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 2,
+            "cn0_dbhz": 33.0,
+            "elevation_deg": 30.0,
+            "azimuth_deg": 60.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 3,
+            "cn0_dbhz": 34.0,
+            "elevation_deg": 40.0,
+            "azimuth_deg": 120.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 4,
+            "cn0_dbhz": 35.0,
+            "elevation_deg": 50.0,
+            "azimuth_deg": 180.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 5,
+            "cn0_dbhz": 36.0,
+            "elevation_deg": 60.0,
+            "azimuth_deg": 240.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          },
+          {
+            "constellation": "GPS",
+            "svid": 6,
+            "cn0_dbhz": 37.0,
+            "elevation_deg": 70.0,
+            "azimuth_deg": 300.0,
+            "used_in_fix": true,
+            "has_ephemeris": true,
+            "has_almanac": true,
+            "carrier_hz": 1575420000.0
+          }
+        ]
+      }
+    ],
+    "connections": [
+      {
+        "t_ms": 0,
+        "wifi_id": "example-wifi-1",
+        "cell_id": "example-cell-1",
+        "ble_ids": [
+          "example-ble-1"
+        ]
+      },
+      {
+        "t_ms": 60000,
+        "wifi_id": null,
+        "cell_id": "example-cell-1",
+        "ble_ids": []
+      },
+      {
+        "t_ms": 300000,
+        "wifi_id": "example-wifi-1",
+        "cell_id": "example-cell-1",
+        "ble_ids": [
+          "example-ble-1"
+        ]
+      },
+      {
+        "t_ms": 360000,
+        "wifi_id": null,
+        "cell_id": "example-cell-1",
+        "ble_ids": []
+      },
+      {
+        "t_ms": 600000,
+        "wifi_id": "example-wifi-1",
+        "cell_id": "example-cell-1",
+        "ble_ids": [
+          "example-ble-1"
+        ]
+      }
+    ]
+  },
+  "warnings": [
+    "Trajectory uses piecewise geodesic positions and linear altitude; corners and speed changes can create abrupt motion transitions.",
+    "No imported wifi records; added a clearly labeled example wifi fixture at the route start.",
+    "No imported cell records; added a clearly labeled example cell fixture at the route start.",
+    "No imported ble records; added a clearly labeled example ble fixture at the route start.",
+    "Added 13 explicitly example radio fields. Empty surveyed SSIDs are preserved. Generated RSSI is modeled, never surveyed.",
+    "Imported radio coverage is incomplete; example supplements do not make it complete.",
+    "GNSS status and satellite epochs are explicit examples; NMEA is derived from those epochs, not used to invent receiver logs.",
+    "Connection states are example fixtures; radio visibility is modeled catalog visibility, not a scan or BLE GATT connection.",
+    "This demonstration contains example GNSS outages, activity, connection and power events; none represent observations of a device or account.",
+    "Stopped 0-60s and 300-360s; driving and turning 60-300s; walking 360-600s; stopped 600-660s.",
+    "All playback outputs are simulated; activity, power, mount, magnetic baseline, pressure reference and generated noise are example/model inputs."
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "name": "observatory-controller",
+  "version": "1.0.0",
+  "description": "24/7 DuoPlus telemetry and local-search observatory daemon",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma --generator client",
+    "prisma:generate:postgresql": "prisma generate --schema prisma/postgresql/schema.prisma --generator client",
+    "prisma:generate:importer": "prisma generate --schema prisma/postgresql/schema.prisma --generator migrationClient",
+    "prisma:migrate:postgresql": "prisma migrate deploy --schema prisma/postgresql/schema.prisma",
+    "db:export:sqlite": "node scripts/migrate-sites-database.mjs export",
+    "db:import:postgresql": "node scripts/migrate-sites-database.mjs import",
+    "db:check-schemas": "node scripts/check-database-schemas.mjs",
+    "prisma:migrate": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "cli": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.10.1",
+    "@turf/bearing": "^7.4.0",
+    "@turf/destination": "^7.4.0",
+    "@turf/distance": "^7.4.0",
+    "axios": "^1.9.0",
+    "bullmq": "^5.56.1",
+    "dotenv": "^16.5.0",
+    "ioredis": "^5.6.1",
+    "pino": "^9.7.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "prisma": "^6.10.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.0"
+    }
+  }
+}
+

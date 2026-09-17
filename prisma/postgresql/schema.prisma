@@ -1,0 +1,429 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator migrationClient {
+  provider = "prisma-client-js"
+  output   = "../generated/postgresql-import"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String      @id
+  name      String
+  createdAt DateTime    @default(now())
+  users     User[]
+  keys      TenantKey[]
+  wigleCredential TenantWigleCredential?
+  devices   Device[]
+  sites     Site[]
+}
+
+model TenantWigleCredential {
+  tenantId       String   @id
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ciphertext     String
+  iv             String
+  tag            String
+  apiNameLast4   String
+  apiTokenLast4  String
+  lastValidatedAt DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model User {
+  id           String    @id
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model TenantKey {
+  id             String    @id
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  label          String
+  ciphertext     String
+  iv             String
+  tag            String
+  last4          String
+  keyHash        String
+  dead           Boolean   @default(false)
+  congestedUntil DateTime?
+  failCount      Int       @default(0)
+  successCount   Int       @default(0)
+  lastUsedAt     DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([tenantId, keyHash])
+}
+
+model Device {
+  id               String    @id
+  tenantId         String
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  imageId          String
+  name             String?
+  active           Boolean   @default(true)
+  poweredOn        Boolean   @default(false)
+  duoPlusStatus    Int?
+  lastPowerSyncAt  DateTime?
+  lastSeenOnAt     DateTime?
+  phase            String    @default("STATIONARY")
+  activeTripId     String?
+  campaignStart    DateTime  @default(now())
+  campaignEnd      DateTime
+  timezone         String    @default("America/New_York")
+  language         String    @default("en-US")
+
+  anchorLat        Float
+  anchorLng        Float
+  movementRadiusM  Int       @default(15)
+  currentLat       Float
+  currentLng       Float
+  groundElevationM Float     @default(20)
+  lastAltitudeM    Float     @default(21.5)
+  lastBearing      Float     @default(0)
+  lastSpeedMps     Float     @default(0.2)
+  lastAccuracyM    Float     @default(7)
+  lastTickAt       DateTime?
+
+  wifiSsid         String
+  wifiBssid        String
+  wifiMac          String
+  wifiLocked       Boolean   @default(true)
+  wifiClusterJson  String?
+  wigleQueriedAt   DateTime?
+
+  mcc              String    @default("310")
+  mnc              String    @default("260")
+  operator         String    @default("T-Mobile USA")
+  simCountry       String    @default("US")
+  msisdn           String?
+  msin             String?
+  iccid            String?
+  imsi             String?
+  apn              String?
+  apnType          String?
+  lac              Int       @default(12001)
+  cid              Int       @default(44821)
+  carrierLocked    Boolean   @default(true)
+  proxyIp          String?
+  proxyIsp         String?
+  proxyAsn         String?
+  proxyKind        String?
+  proxyMismatch    Boolean   @default(false)
+  proxyAlert       String?
+  lastSeenProxyIp  String?
+  lastSeenProxyAsn String?
+  cellRadio        String    @default("LTE")
+  cellLocked       Boolean   @default(true)
+  wigleCellQueriedAt DateTime?
+  bluetoothName    String?
+  bluetoothAddress String?
+
+  transitMode      String?
+  targetLat        Float?
+  targetLng        Float?
+  polylineJson     String?
+  routeIndex       Int       @default(0)
+  routeProgressM   Float     @default(0)
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  ticks            TelemetryTick[]
+  rpaJobs          RpaJob[]
+  events           DeviceEvent[]
+  environment      DeviceEnvironment?
+  wigleArchives    DeviceWigleArchive[]
+  wigleUploads     DeviceWigleUpload[]
+  locationRequests LocationRequest[]
+  drivingTrips     DrivingTrip[]
+  tripTokens       TripToken[]
+  site             Site?
+
+  @@unique([tenantId, imageId])
+}
+
+model DeviceWigleArchive {
+  id          String   @id @default(cuid())
+  deviceId    String
+  device      Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  sha256      String
+  clusterJson String
+  queriedAt   DateTime
+  importedAt  DateTime @default(now())
+  source      String   @default("LOCAL_IMPORT")
+
+  @@unique([deviceId, sha256])
+}
+
+model LocationRequest {
+  id                     String   @id
+  deviceId               String
+  device                 Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  tenantId               String
+  imageId                String
+  source                 String
+  lat                    Float
+  lng                    Float
+  status                 String   @default("REQUESTED")
+  evidenceLevel          String   @default("REQUESTED")
+  requestedAt            DateTime @default(now())
+  dispatchedAt           DateTime?
+  completedAt            DateTime?
+  acceptedAt             DateTime?
+  observedAt             DateTime?
+  dispatchIntervalMs     Float?
+  queueDelayMs           Float?
+  apiLatencyMs           Float?
+  androidObservationJson String?
+  error                  String?
+  rejectionReason        String?
+  tripId                 String?
+  trip                   DrivingTrip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([deviceId, requestedAt])
+  @@index([deviceId, dispatchedAt])
+}
+
+model DrivingTrip {
+  id                   String @id
+  deviceId             String
+  device               Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  tenantId             String
+  imageId              String
+  revision             String
+  status               String @default("PREVIEW")
+  routeJson            String
+  alternativesJson     String @default("[]")
+  optionsJson          String
+  originLat            Float
+  originLng            Float
+  elapsedMs            Float @default(0)
+  progressM            Float @default(0)
+  durationMs           Float
+  acceptedLat          Float?
+  acceptedLng          Float?
+  lastRequestId        String?
+  pendingElapsedMs     Float?
+  pendingProgressM     Float?
+  gpsRetryCount        Int @default(0)
+  lastStepAt           DateTime?
+  nextTickAt           DateTime?
+  pauseReason          String?
+  error                String?
+  baselineJson         String?
+  phoneSyncJson        String @default("{}")
+  arrivalWifiJson      String @default("{\"enabled\":false,\"status\":\"DISABLED\"}")
+  arrivalRpaJson       String?
+  idempotencyKey       String?
+  requestHash          String?
+  startedAt            DateTime?
+  arrivedAt            DateTime?
+  finishedAt           DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  locationRequests     LocationRequest[]
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([deviceId, createdAt])
+  @@index([status, nextTickAt])
+}
+
+model TripToken {
+  id           String @id
+  deviceId     String
+  device       Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  tenantId     String
+  label        String
+  tokenHash    String @unique
+  last4        String
+  expiresAt    DateTime
+  lastUsedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([deviceId])
+}
+
+model DeviceWigleUpload {
+  id             String   @id @default(cuid())
+  deviceId       String
+  device         Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  sha256         String
+  filename       String
+  payloadJson    String
+  importedAt     DateTime @default(now())
+  wifiCount      Int
+  cellCount      Int
+  bluetoothCount Int      @default(0)
+  rejectedCount  Int
+  duplicateCount Int
+
+  @@unique([deviceId, sha256])
+}
+
+model DeviceEnvironment {
+  deviceId      String   @id
+  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  revision      String
+  status        String   @default("PREPARED")
+  preparedJson  String
+  preparedAt    DateTime @default(now())
+  acceptedJson  String?
+  acceptedAt    DateTime?
+  error         String?
+  verificationJson String?
+  acceptedVerificationJson String?
+  dispatchedAt             DateTime?
+}
+
+model TelemetryTick {
+  id         String   @id @default(cuid())
+  deviceId   String
+  device     Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  lat        Float
+  lng        Float
+  altitudeM  Float
+  accuracyM  Float
+  speedMps   Float
+  bearing    Float
+  phase      String
+  pushed     Boolean  @default(false)
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([deviceId, createdAt])
+}
+
+model RpaJob {
+  id            String   @id @default(cuid())
+  deviceId      String
+  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  templateId    String
+  templateType  Int      @default(2)
+  name          String
+  variablesJson String   @default("{}")
+  status        String   @default("queued")
+  error         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model DeviceEvent {
+  id        String   @id @default(cuid())
+  deviceId  String
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  kind      String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([deviceId, createdAt])
+}
+
+model ApiKeyStat {
+  id             String    @id
+  label          String
+  congestedUntil DateTime?
+  failCount      Int       @default(0)
+  successCount   Int       @default(0)
+  lastUsedAt     DateTime?
+  dead           Boolean   @default(false)
+  lastError      String?
+}
+
+model Site {
+  id                  String       @id @default(cuid())
+  tenantId            String
+  tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deviceId            String       @unique
+  device              Device       @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  name                String
+  lat                 Float
+  lng                 Float
+  elevationM          Float?
+  street              String       @default("")
+  zip                 String       @default("")
+  proxyId             String?
+  proxyIp             String
+  timezone            String
+  language            String
+  state               String       @default("STILL")
+  enabled             Boolean      @default(false)
+  templateId          String?
+  templateType        Int          @default(2)
+  profileJson         String       @default("{}")
+  profileStatus       String       @default("DRAFT")
+  profileRevision     String?
+  profileError        String?
+  appliedAt           DateTime?
+  lastGpsAt           DateTime?
+  wigleCheckedAt      DateTime?
+  nextWigleRefreshAt   DateTime?
+  weeklyRefresh       Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  jobs                SiteJob[]
+
+  @@unique([tenantId, proxyIp])
+}
+
+model SiteJob {
+  id                   String      @id @default(cuid())
+  tenantId             String
+  siteId               String
+  site                 Site        @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  keyword              String
+  app                  String
+  motion               String      @default("STILL")
+  scheduledAt          DateTime
+  status               String      @default("QUEUED")
+  idempotencyKey       String
+  requestJson          String      @default("{}")
+  preflightJson        String?
+  providerResponseJson String?
+  error                String?
+  callbackTokenHash    String?
+  callbackExpiresAt    DateTime?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  result               SiteResult?
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([status, scheduledAt])
+  @@index([siteId, createdAt])
+}
+
+model SiteResult {
+  id             String   @id @default(cuid())
+  jobId          String   @unique
+  job            SiteJob  @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  rank           Int?
+  rawJson        String
+  evidenceUrl    String?
+  capturedAt     DateTime
+  source         String
+  provenanceJson String
+  createdAt      DateTime @default(now())
+}
+
