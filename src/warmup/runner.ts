@@ -9,6 +9,7 @@ import { readProviderGps } from '../api/providerGps.js';
 import { checkDevicePower } from '../orchestrator/powerCheck.js';
 import { haversineMeters } from '../geo/haversine.js';
 import { withTripLease } from '../trips/lease.js';
+import { assertNoPendingRpa } from '../queue/rpaOwnership.js';
 import { withEnvironmentWindow } from '../orchestrator/deviceOperations.js';
 import { busyRunStates,remoteRunStates,localParts,dayNumber,taskEvidence,providerTime,expectedTaskCount,type Task } from './model.js';
 import { materializeDays,ownCampaign,selectCityWifi } from './service.js';
@@ -37,8 +38,9 @@ export async function availableSlots(tenantId:string) {
 }
 async function campaignStillRuns(id:string,deviceId:string,imageId:string) {
  const c=await prisma.warmupCampaign.findUniqueOrThrow({where:{id},include:{device:true}});
- if(c.status!=='RUNNING'||c.deviceId!==deviceId||c.imageId!==imageId||c.device.imageId!==imageId||c.device.activeTripId)throw new HttpError(409,'Campaign paused or phone identity/ownership changed');
- if(await prisma.site.count({where:{deviceId}}))throw new HttpError(409,'A client assignment conflicts with this warmup phone');
+ if(c.status!=='RUNNING'||c.deviceId!==deviceId||c.imageId!==imageId||c.device.imageId!==imageId||c.reservedImageId!==imageId||await prisma.device.count({where:{imageId,activeTripId:{not:null}}}))throw new HttpError(409,'Campaign paused or phone identity/ownership changed');
+ if(await prisma.site.count({where:{device:{imageId}}}))throw new HttpError(409,'A client assignment conflicts with this warmup phone');
+ await assertNoPendingRpa(deviceId);
  return c;
 }
 async function reconcile(run:WarmupRun) {

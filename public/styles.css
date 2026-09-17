@@ -427,3 +427,16 @@ body[data-inspector="environment"] .compass { top: 145px; }
 @media (max-width: 360px) { .brand p { max-width: 100px; }.top-actions .btn, .top-actions #btnKeys { width: 28px; flex-basis: 28px; }.top-actions { gap: 1px; }.topbar { padding: 0 10px; gap: 5px; } }
 @media (max-width: 360px) { .inspector-tabs button[data-inspector-tab="environment"] { font-size: 0; }.inspector-tabs button[data-inspector-tab="environment"]::after { content: "Env."; font-size: 11px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; scroll-behavior: auto !important; } }
+
+.capability-notice { flex: 0 0 auto; padding: 7px 20px; background: #fff7e7; color: #79500b; border-bottom: 1px solid #ecd9af; font-size: 12px; }
+.capability-notice summary { cursor: pointer; font-weight: 600; }
+.capability-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 20px; margin: 10px 0 4px; color: var(--text); }
+.capability-grid dt { font-weight: 650; margin-bottom: 3px; }.capability-grid dd { margin: 0; color: #65583f; }
+@media (max-width: 800px) { .capability-notice { padding: 7px 14px; }.capability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 28vh; overflow: auto; } }
+
+.fleet-item .inventory-import-warning { color: var(--warn); padding: 6px 8px; background: #fff4de; border-radius: 4px; }
+#rpaResolveForm { display: grid; gap: 12px; margin-top: 16px; }
+#rpaResolveForm > label { display: grid; gap: 5px; }
+#rpaResolveForm > .site-check-label { display: flex; align-items: flex-start; }
+#rpaResolveForm textarea { width: 100%; font: inherit; }
+#rpaJobsList { max-height: 32vh; overflow: auto; }

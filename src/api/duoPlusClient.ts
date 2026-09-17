@@ -18,6 +18,8 @@ import { duoPlusRateLimiter } from "./rateLimit.js";
 import { readDeviceWifi, type SubmittedWifi } from "./environmentWifi.js";
 import { buildDriftPayload, buildWifiApplyPayload, validateImageId } from "./duoPlusPayloads.js";
 import { sanitizeCloudPhoneUpdateResult } from "./gpsRejectionReason.js";
+import { providerFailure } from "./providerError.js";
+import { defaultRpaIssueAt } from "./rpaSchedule.js";
 
 export async function validateDuoPlusKey(rawKey: string): Promise<void> {
   try {
@@ -75,7 +77,7 @@ async function requestOnKey<T>(key: PooledKey, path: string, body: unknown, tena
         if (payload.code === 429) {
           throw new RateLimitError(`DuoPlus 429 on ${path}`, 2000);
         }
-        throw new HttpError(502, `DuoPlus request failed (code ${payload.code})`);
+        throw providerFailure(path, payload.code, payload.message, key.key);
       }
       if (requireAcceptanceEnvelope && (res.status !== 200 || payload?.code !== 200)) {
         throw new HttpError(502, "DuoPlus did not return a valid acceptance response. Review the device before retrying.");
@@ -287,12 +289,7 @@ export async function triggerRpaTask(
   variables: Record<string, unknown>,
   opts?: { name?: string; templateType?: 1 | 2; issueAt?: string; remark?: string; tenantId?: string; beforeSend?: () => Promise<void>; requireAcceptance?: boolean },
 ): Promise<unknown> {
-  const issueAt =
-    opts?.issueAt ??
-    new Date(Date.now() + 15_000)
-      .toISOString()
-      .slice(0, 16)
-      .replace("T", " ");
+  const issueAt = opts?.issueAt ?? defaultRpaIssueAt();
 
   const configMap: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(variables)) {
@@ -312,7 +309,7 @@ export async function triggerRpaTask(
     };
   }
 
-  return post("/api/v1/automation/addTask", {
+  const body = {
     template_id: templateId,
     template_type: opts?.templateType ?? 2,
     name: opts?.name ?? `observatory-${imageId}-${Date.now()}`,
@@ -324,7 +321,13 @@ export async function triggerRpaTask(
         issue_at: issueAt,
       },
     ],
-  }, opts?.tenantId, opts?.beforeSend, opts?.requireAcceptance ?? false);
+  };
+  return post("/api/v1/automation/addTask", body, opts?.tenantId, async () => {
+    // Refresh only the default schedule after the API-key queue wait. Explicit
+    // site/warmup schedules retain their own deadline and ownership checks.
+    if (!opts?.issueAt) body.images[0]!.issue_at = defaultRpaIssueAt();
+    await opts?.beforeSend?.();
+  }, opts?.requireAcceptance ?? false);
 }
 
 export async function listCloudPhoneGroups(page: number, tenantId: string): Promise<unknown> {

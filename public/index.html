@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#202524" />
   <title>Observatory Controller</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/vendor/leaflet-1.9.4/leaflet.css" />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/sites.css" />
   <link rel="stylesheet" href="/warmup.css" />
@@ -27,6 +27,15 @@
     <button type="button" data-workspace-section="sites" class="active" aria-pressed="true"><span class="icon" style="--icon:url('/icons/map-pin.svg')" aria-hidden="true"></span>Clients</button>
     <button type="button" data-workspace-section="devices" aria-pressed="false"><span class="icon" style="--icon:url('/icons/smartphone.svg')" aria-hidden="true"></span>Devices</button>
   </nav>
+  <details class="capability-notice">
+    <summary>Radio readiness: cell and Bluetooth playback unavailable</summary>
+    <dl class="capability-grid">
+      <div><dt>GPS movement</dt><dd>Controller and player movement requests are supported. Check Android location evidence to confirm the phone's position.</dd></div>
+      <div><dt>Wi-Fi provider profile</dt><dd>Profile apply and provider readback are supported. Android Wi-Fi scan results remain unverified.</dd></div>
+      <div><dt>Radio model</dt><dd>Saved Wi-Fi, cell and Bluetooth observations can inform modeled frames. Model output does not confirm device playback.</dd></div>
+      <div><dt>Android radio verification</dt><dd>Cell and Bluetooth playback are not integrated. Cell handovers and movement-based radio changes are not verified.</dd></div>
+    </dl>
+  </details>
 <main id="warmupWorkspace" class="warmup-workspace" aria-label="Profile warmup" hidden>
 <div class="wu-heading"><div><p class="wu-eyebrow">One phone. One profile. Its own timeline.</p><h2>Profile warmup</h2><p class="meta">Prepare your existing phone profiles with consistent geography and daily task schedules.</p></div><div class="wu-heading-actions"><button class="btn ghost" id="warmupAddCity">Add city</button><button class="btn" id="warmupNew" disabled>New campaign</button></div></div>
 <div id="warmupFeedback" role="status" aria-live="polite" class="sites-feedback" hidden></div>
@@ -40,6 +49,7 @@
       <div class="sites-heading"><h2>Clients</h2><span class="meta" id="sitesSummary">Loading workspace...</span></div>
       <div class="sites-toolbar-actions"><button class="btn ghost icon-button" id="sitesReload" type="button" title="Reload clients and results" aria-label="Reload clients and results"><span class="icon" style="--icon:url('/icons/refresh-cw.svg')" aria-hidden="true"></span></button><button class="btn" id="siteCreate" type="button" disabled><span class="icon" style="--icon:url('/icons/plus.svg')" aria-hidden="true"></span>Add client</button></div>
     </div>
+    <div id="sitesReadiness" class="sites-feedback error" role="status" hidden></div>
     <div id="sitesFeedback" class="sites-feedback" role="status" aria-live="polite" hidden></div>
     <div class="sites-layout">
       <section class="sites-records" aria-label="Clients and results">
@@ -120,8 +130,8 @@
       <div class="modal-actions"><button type="submit" class="btn">Register device</button></div>
     </form>
   </div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/vendor/leaflet-1.9.4/leaflet.js"></script>
   <script src="/icons.js"></script><script src="/ui-state.js"></script><script src="/map-history.js"></script><script src="/environment-explorer.js"></script><script src="/driving.js"></script><script src="/sites.js"></script><script src="/warmup.js"></script>
-  <script src="/app.js"></script>
+  <script src="/rpa-jobs.js"></script><script src="/polling.js"></script><script src="/app.js"></script>
 </body>
 </html>

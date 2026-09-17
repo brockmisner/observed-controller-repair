@@ -1,4 +1,5 @@
 import { assertNoWarmup } from "../warmup/service.js";
+import { assertNoPendingRpa } from "../queue/rpaOwnership.js";
 import { usesPlayer } from "./playerConnection.js";
 import { preparePlayerStart, stopPlayerTrip } from "./playerRunner.js";
 import { randomUUID } from "node:crypto";
@@ -187,6 +188,7 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
     const duplicate = await existing();
     if (duplicate) return serializeTrip(duplicate);
     const current = await ownedDevice(tenantId, device.id);
+    await assertNoPendingRpa(current.id);
     if (current.activeTripId) throw new HttpError(409, "This device already owns an active trip. Cancel it before preparing another.");
     const origin = { lat: current.currentLat, lng: current.currentLng };
     if (input.origin && routeSegmentDistance(input.origin, origin) > 1) throw new HttpError(400, "Trip origin must match the current controller position.");
@@ -203,6 +205,7 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
     try {
       row = await prisma.$transaction(async (tx) => {
         const fresh = await ownedDevice(tenantId, current.id, tx);
+        await assertNoPendingRpa(fresh.id, tx);
         if (fresh.activeTripId || fresh.currentLat !== origin.lat || fresh.currentLng !== origin.lng) throw new HttpError(409, "The device moved while preparing the route. Preview again.");
         return tx.drivingTrip.create({ data: {
           id: randomUUID(), tenantId, deviceId: current.id, imageId: current.imageId, revision: randomUUID(),
@@ -252,6 +255,7 @@ async function freshBaseline(device: Device) {
 export async function startTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["PREVIEW"]);
+    await assertNoPendingRpa(device.id);
     if (device.phase === "EXPIRED" || device.campaignEnd.getTime() <= Date.now()) throw new HttpError(409, "The device campaign expired. Renew it before starting a trip.");
     const route = routeFrom(row);
     requireFreshPreview(route);
@@ -262,6 +266,7 @@ export async function startTrip(tenantId: string, id: string, revision: string) 
     await lease.assertOwned();
     await prisma.$transaction(async (tx) => {
       requireFreshPreview(route);
+      await assertNoPendingRpa(device.id, tx);
       const now = new Date();
       const claimed = await tx.device.updateMany({ where: { id: device.id, tenantId, activeTripId: null, currentLat: device.currentLat, currentLng: device.currentLng,
         anchorLat: device.anchorLat, anchorLng: device.anchorLng, movementRadiusM: device.movementRadiusM,
@@ -288,6 +293,7 @@ export async function pauseTrip(tenantId: string, id: string, revision: string) 
 export async function resumeTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["PAUSED"]);
+    await assertNoPendingRpa(device.id);
     if (usesPlayer(row.imageId)) {
       await stopPlayerTrip(row);
       await preparePlayerStart(row);
@@ -306,6 +312,7 @@ export async function resumeTrip(tenantId: string, id: string, revision: string)
     }
     await lease.assertOwned();
     await prisma.$transaction(async (tx) => {
+      await assertNoPendingRpa(device.id, tx);
       const resumed = await tx.device.updateMany({ where: { id: device.id, tenantId, activeTripId: row.id, poweredOn: true, duoPlusStatus: 1 },
         data: { active: true, phase: "NAVIGATING" } });
       if (resumed.count !== 1) throw new HttpError(409, "The device changed before the trip could resume.");
