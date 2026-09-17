@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { radioRecordSchema } from '../radio/schema.js';
 export const liveCampaignStates = ['DRAFT', 'RUNNING', 'PAUSED', 'NEEDS_ATTENTION'];
 export const busyRunStates = ['PREPARING', 'SUBMITTING', 'AWAITING', 'RUNNING', 'REMOTE_PAUSED', 'UNCONFIRMED'];
 export const remoteRunStates = ['SUBMITTING', 'AWAITING', 'RUNNING', 'REMOTE_PAUSED', 'UNCONFIRMED'];
@@ -25,12 +26,7 @@ export const campaignSchema = z.object({
   wifiMode:z.enum(['PRESERVE','CITY']).default('PRESERVE'),
   schedule:z.array(taskSchema).min(1).max(12),
 }).strict().refine(v=>new Set(v.schedule.map(t=>t.key)).size===v.schedule.length,'Daily task keys must be unique');
-export const radioSchema = z.object({
-  kind:z.enum(['WIFI','CELL','BLUETOOTH']), identifier:z.string().min(1).max(128),
-  ssid:z.string().max(128).nullable().default(null), lat:z.number().finite().min(-90).max(90), lng:z.number().finite().min(-180).max(180),
-  qos:z.number().int().min(0).max(7).nullable().default(null), lastSeen:z.string().max(100).nullable().default(null),
-  lastUpdated:z.string().max(100).nullable().default(null), source:z.string().max(300).default('User import'),
-}).strip();
+export const radioSchema = radioRecordSchema;
 export const citySchema = z.object({name:z.string().trim().min(1).max(100), timezone:zoneSchema,
   lat:z.number().finite().min(-90).max(90),lng:z.number().finite().min(-180).max(180),radiusM:z.number().int().min(100).max(100000).default(20000)}).strict();
 export function localParts(at:Date, zone:string) {
