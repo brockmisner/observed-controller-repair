@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { recordKey } from '../radio/schema.js';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
@@ -30,11 +31,11 @@ export async function cityImport(tenantId:string,id:string,raw:unknown) {
   const payload=JSON.parse(upload.payloadJson);if(payload.version!==1||!Array.isArray(payload.records))throw new HttpError(409,'Unsupported saved upload format');
   incoming=z.array(radioSchema).max(10000).parse(payload.records.map((r:Record<string,unknown>)=>({...r,source:upload.filename})));
  }
- const records=new Map(z.array(radioSchema).parse(JSON.parse(city.recordsJson)).map(r=>[`${r.kind}:${r.identifier.toLowerCase()}`,r]));
+ const records=new Map(z.array(radioSchema).parse(JSON.parse(city.recordsJson)).map(r=>[recordKey(r),r]));
  let outside=0;
  for(const record of incoming) {
   if(haversineMeters(city.lat,city.lng,record.lat,record.lng)>city.radiusM){outside++;continue;}
-  const key=`${record.kind}:${record.identifier.toLowerCase()}`,prev=records.get(key);
+  const key=recordKey(record),prev=records.get(key);
   if(!prev||Date.parse(record.lastSeen??'')>=Date.parse(prev.lastSeen??'')||!Number.isFinite(Date.parse(prev.lastSeen??'')))records.set(key,record);
  }
  if(records.size>10000)throw new HttpError(400,'City datasets support up to 10,000 observations; split larger regions');
