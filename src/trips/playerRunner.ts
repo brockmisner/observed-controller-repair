@@ -1,14 +1,15 @@
 import type { DrivingTrip } from '@prisma/client';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../db.js';
 import { HttpError } from '../http/errors.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { withPlayer, usesPlayer, observePlayerPhone } from './playerConnection.js';
 import { terminal, type PlayerStatus } from './playerProtocol.js';
-import { buildPlayerPlan } from './playerPlan.js';
+import { PlayerPlanCache } from './playerPlan.js';
 import type { TripLease } from './lease.js';
 import { ensureTripMaps } from './phoneSync.js';
+const planCache = new PlayerPlanCache();
 interface PlayerState {
   sessionId: string; offsetMs: number; instanceId?: string; started?: boolean;
   checkedAt?: string; status?: PlayerStatus; observedSeq?: number; phoneObservation?: Awaited<ReturnType<typeof observePlayerPhone>>;
@@ -29,18 +30,20 @@ function matched(s: PlayerStatus, p: PlayerState) {
   }
 }
 export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
-  const p = playerState(trip);
-  if (!p) return;
-  const status = await withPlayer(async c => {
-    const current = await c.request({ op: 'status' });
-    // A fresh instance with successful recovery has no active providers or session.
-    if (current.state === 'IDLE' && current.session_id === '' && current.cleanup_ok) return current;
-    matched(current, p);
-    return terminal(current) ? current : c.request({ op: 'cancel', session_id: p.sessionId });
-  }).catch(() => { throw new HttpError(409, 'Player stop could not be confirmed. Ownership is retained; retry Cancel after reconnecting. The phone lease expires without heartbeats.'); });
-  if (!status.cleanup_ok || (!terminal(status) && status.state !== 'IDLE')) throw new HttpError(409, 'Player provider cleanup is unconfirmed. Ownership is retained.');
-  if (status.session_id === p.sessionId) await recordProgress(trip, { ...p, status, checkedAt: new Date().toISOString() });
-  else await store(trip, { ...p, status, checkedAt: new Date().toISOString() });
+  try {
+    const p = playerState(trip);
+    if (!p) return;
+    const status = await withPlayer(async c => {
+      const current = await c.request({ op: 'status' });
+      // A fresh instance with successful recovery has no active providers or session.
+      if (current.state === 'IDLE' && current.session_id === '' && current.cleanup_ok) return current;
+      matched(current, p);
+      return terminal(current) ? current : c.request({ op: 'cancel', session_id: p.sessionId });
+    }).catch(() => { throw new HttpError(409, 'Player stop could not be confirmed. Ownership is retained; retry Cancel after reconnecting. The phone lease expires without heartbeats.'); });
+    if (!status.cleanup_ok || (!terminal(status) && status.state !== 'IDLE')) throw new HttpError(409, 'Player provider cleanup is unconfirmed. Ownership is retained.');
+    if (status.session_id === p.sessionId) await recordProgress(trip, { ...p, status, checkedAt: new Date().toISOString() });
+    else await store(trip, { ...p, status, checkedAt: new Date().toISOString() });
+  } finally { planCache.delete(trip.id); }
 }
 export async function preparePlayerStart(trip: DrivingTrip): Promise<void> {
   if (!usesPlayer(trip.imageId)) return;
@@ -55,7 +58,7 @@ export async function preparePlayerStart(trip: DrivingTrip): Promise<void> {
 }
 async function recordProgress(trip: DrivingTrip, p: PlayerState) {
   const status = p.status!;
-  const plan = buildPlayerPlan(JSON.parse(trip.routeJson), JSON.parse(trip.optionsJson), p.offsetMs);
+  const { plan } = planCache.get(trip, p);
   if (status.applied_seq < -1 || status.applied_seq >= plan.samples.length) throw new Error('Invalid player sequence');
   const sample = plan.samples[status.applied_seq];
   const sync = { ...JSON.parse(trip.phoneSyncJson || '{}'), player: p };
@@ -90,16 +93,14 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
       await store(trip, p); // Persist identity BEFORE sending any command.
     }
     const player = p;
-    const plan = buildPlayerPlan(JSON.parse(trip.routeJson), JSON.parse(trip.optionsJson), player.offsetMs);
-    const bytes = Buffer.from(JSON.stringify(plan));
-    if (bytes.length > 8_000_000) throw new Error('Player plan exceeds upload limit');
+    const { bytes, sha256 } = planCache.get(trip, player);
     const status = await withPlayer(async c => {
       let s = await c.request({ op: 'status' });
       if (player.instanceId && s.instance_id !== player.instanceId) throw new Error('Player restarted');
       if (!player.instanceId) { player.instanceId = s.instance_id; await store(trip, player); }
       if (!player.started) {
         await requireOwner();
-        s = await c.request({ op: 'prepare', session_id: player.sessionId, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+        s = await c.request({ op: 'prepare', session_id: player.sessionId, size: bytes.length, sha256 });
         matched(s, player);
         if (s.state === 'UPLOADING') {
           for (let offset = s.received_bytes; offset < bytes.length; offset += 48000) {
@@ -133,6 +134,7 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
         await tx.drivingTrip.update({ where: { id: trip.id }, data: { status: 'ARRIVED', arrivedAt: new Date(), finishedAt: new Date(), nextTickAt: null, pauseReason: null, error: null } });
         await tx.device.updateMany({ where: { id: trip.deviceId, activeTripId: trip.id }, data: { activeTripId: null, active: false, phase: 'STATIONARY', transitMode: null, lastSpeedMps: 0 } });
       });
+      planCache.delete(trip.id);
     } else if (terminal(status)) throw new Error(`Player stopped: ${status.error || status.state}`);
     else await prisma.drivingTrip.updateMany({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING' }, data: {
       nextTickAt: new Date(Date.now() + 1500), pauseReason: null, error: null,

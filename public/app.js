@@ -88,6 +88,9 @@ const sites = window.ObservatorySites?.create({
   showDevices: () => setMobileView(document.body.dataset.view || "map"),
 });
 const warmup = window.ObservatoryWarmup?.create({ api, openModal, closeModal });
+const rpaJobs = window.ObservatoryRpaJobs?.create({ api, openModal, closeModal,
+  onResolved: () => { state.snapshotVersion += 1; void load().catch(() => {}); },
+});
 map.on("moveend", () => {
   const c = map.getCenter();
   localStorage.setItem("obs-map", JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
@@ -168,6 +171,7 @@ function openModal(id) {
   if ($("sitesWorkspace")) $("sitesWorkspace").inert = true;
   if ($("warmupWorkspace")) $("warmupWorkspace").inert = true;
   document.querySelector(".workspace-nav")?.setAttribute("inert", "");
+  document.querySelector(".capability-notice")?.setAttribute("inert", "");
   if ($("mobileNav")) $("mobileNav").inert = true;
   $(id).querySelector("input:not([disabled]), button:not([disabled])")?.focus();
 }
@@ -181,12 +185,15 @@ function closeModal(id) {
   if ($("warmupWorkspace")) $("warmupWorkspace").inert = modalOpen;
   const workspaceNav = document.querySelector(".workspace-nav");
   if (workspaceNav) workspaceNav.inert = modalOpen;
+  const capabilityNotice = document.querySelector(".capability-notice");
+  if (capabilityNotice) capabilityNotice.inert = modalOpen;
   if ($("mobileNav")) $("mobileNav").inert = modalOpen;
 }
 
 function clearWorkspace() {
   sites?.clear();
   warmup?.clear();
+  rpaJobs?.clear();
   environmentExplorer?.clear();
   driving?.clear();
   state.sessionVersion += 1;
@@ -274,20 +281,28 @@ function daysLeft(end) {
   return Math.max(0, ms / 86400000);
 }
 
-async function api(path, opts) {
+async function api(path, opts = {}) {
   const sessionVersion = state.sessionVersion;
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    ...opts,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401) {
-    if (sessionVersion === state.sessionVersion) showLogin();
-    throw new Error(data.error || "unauthorized");
-  }
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
+  const controller = !opts.signal && (!opts.method || opts.method === "GET") ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 20_000) : null;
+  try {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      ...(controller ? { signal: controller.signal } : {}),
+      ...opts,
+    });
+    const data = await res.json().catch((error) => { if (controller?.signal.aborted) throw error; return {}; });
+    if (res.status === 401) {
+      if (sessionVersion === state.sessionVersion) showLogin();
+      throw new Error(data.error || "unauthorized");
+    }
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  } catch (error) {
+    if (controller?.signal.aborted) throw new Error("Read timed out after 20 seconds. Try Refresh.");
+    throw error;
+  } finally { if (timeout) clearTimeout(timeout); }
 }
 
 function deviceIcon(phase) {
@@ -336,6 +351,13 @@ function renderFleet(snap) {
   const q = $("fleetFilter").value.trim().toLowerCase();
   const filter = $("fleetStatus")?.value || "all";
   const registeredImages = new Set(snap.devices.map((device) => device.imageId));
+  const importIssues = new Map((snap.inventoryImportIssues || []).map((issue) => [issue.imageId, issue]));
+  const importIssueHtml = (imageId) => {
+    const issue = importIssues.get(imageId);
+    if (!issue) return "";
+    const retry = new Date(issue.nextRetryAt);
+    return `<small class="inventory-import-warning"><strong>Import needs attention</strong> · ${escapeHtml(issue.error)}<br>Next automatic attempt: ${escapeHtml(Number.isFinite(retry.getTime()) ? retry.toLocaleString() : "Not scheduled")}</small>`;
+  };
   const inventory = snap.folderInventory;
   const folderSelect = $("fleetFolder");
   const selectedFolder = folderSelect?.value || "all";
@@ -353,7 +375,7 @@ function renderFleet(snap) {
   const pendingHtml = (inventory?.phones || discoveredOnDevices(snap))
     .filter(inFolder)
     .filter((device) => !registeredImages.has(device.imageId))
-    .filter(() => filter !== "attention")
+    .filter((device) => filter !== "attention" || importIssues.has(device.imageId))
     .filter(device => filter !== "on" || inventoryFresh && device.status === 1)
     .filter((device) => !q || `${device.name || ""} ${device.imageId}`.toLowerCase().includes(q))
     .map((device) => `
@@ -363,6 +385,7 @@ function renderFleet(snap) {
           <span class="status-chip neutral">${({1:"ON · Not registered",2:"OFF · Not registered",3:"Expired",4:"Renewal overdue"})[device.status] || "Inventory only"}</span>
         </div>
         <small>${escapeHtml(device.imageId)} · ${escapeHtml(folderLabel(device))}</small>
+        ${importIssueHtml(device.imageId)}
         <div class="row">
           <small>Not registered with Observatory</small>
           ${device.status === 1 ? `<button type="button" class="btn ghost tiny" data-register-image="${escapeHtml(device.imageId)}" aria-label="Register ${escapeHtml(device.name || device.imageId)}">Register</button>` : ""}
@@ -374,7 +397,7 @@ function renderFleet(snap) {
     .filter(inFolder)
     .filter((d) => filter !== "pending")
     .filter((d) => filter !== "on" || window.ObservatoryStatus?.isFreshOn?.(d, statusContext()))
-    .filter((d) => filter !== "attention" || window.ObservatoryStatus?.attention?.(d, statusContext()))
+    .filter((d) => filter !== "attention" || importIssues.has(d.imageId) || window.ObservatoryStatus?.attention?.(d, statusContext()))
     .filter((d) => !q || `${d.name} ${d.imageId}`.toLowerCase().includes(q))
     .map((d) => `
       <button type="button" class="fleet-item ${state.selectedId === d.id ? "active" : ""}" data-id="${escapeHtml(d.id)}" aria-pressed="${state.selectedId === d.id}">
@@ -384,6 +407,7 @@ function renderFleet(snap) {
           ${d.active === false && deviceStatus("activity", d).code !== "trip_paused" ? '<span class="status-chip neutral">Paused</span>' : ""}
         </div>
         <small>${escapeHtml(d.imageId)} · ${escapeHtml(folderLabel(d))}</small>
+        ${importIssueHtml(d.imageId)}
         <div class="fleet-subline">${statusHtml(deviceStatus("wifi", d))}<small>Checked ${age(d.lastPowerSyncAt)}</small></div>
       </button>
     `)
@@ -653,6 +677,7 @@ function renderDetail() {
     <div class="meta">${escapeHtml(location.reason)}</div>
     <dl class="environment-fields"><dt>Model updated</dt><dd>${age(d.lastTickAt)}</dd><dt>Campaign remaining</dt><dd>${daysLeft(d.campaignEnd).toFixed(1)} days</dd></dl>
     ${gpsEvidenceHtml(d)}
+    <div class="section-heading"><h3>Legacy automation</h3><button type="button" class="btn ghost" id="manageRpaJobs">Review jobs</button></div>
     <div class="section-heading"><h3>Source boundaries</h3></div><dl class="environment-fields"><dt>WiGLE</dt><dd>Historical observations</dd><dt>SIM / cell / Bluetooth</dt><dd>Local metadata; not verified on device</dd><dt>Network / DNS</dt><dd>Not verified</dd></dl>
     <div class="section-heading"><h3>Device profile</h3></div><dl class="environment-fields"><dt>Proxy source</dt><dd>Stored proxy lookup; not measured device egress</dd><dt>Proxy IP</dt><dd>${escapeHtml(d.proxyIp || "Unknown")}</dd><dt>Proxy ISP</dt><dd>${escapeHtml(d.proxyIsp || "Unknown")}</dd><dt>Proxy ASN</dt><dd>${escapeHtml(d.proxyAsn || "Unknown")}</dd><dt>Proxy lookup time</dt><dd>Unavailable</dd><dt>SIM source</dt><dd>DuoPlus /info at preview</dd><dt>Preview MCC / MNC</dt><dd>${escapeHtml(d.environment?.profile?.sim?.mcc || "Unknown")} / ${escapeHtml(d.environment?.profile?.sim?.mnc || "Unknown")}</dd><dt>SIM preview time</dt><dd>${environmentTime(d.environment?.preparedAt)}</dd></dl>
   `;
@@ -1758,7 +1783,9 @@ function renderMap(snap) {
   }
 }
 
-async function load() {
+const load = window.ObservatoryPolling.singleFlight(loadSnapshot, () => `${state.sessionVersion}:${state.snapshotVersion}`);
+
+async function loadSnapshot() {
   if (state.authenticated === false) return;
   const sessionVersion = state.sessionVersion;
   const snapshotVersion = state.snapshotVersion;
@@ -1810,6 +1837,7 @@ function renderOps(snap) {
     <svg viewBox="0 0 160 28" width="100%" height="28">${sparkline(qps.series || [], 160, 28)}</svg>
     <div>Last fleet check <b>${age(snap.health.lastFleetSyncAt)}</b></div>
     <div>Last registered ON <b>${snap.health.poweredOn ?? 0}</b> · registered <b>${snap.devices.length}</b></div>
+    ${(snap.inventoryImportIssues || []).length ? `<details><summary>${snap.inventoryImportIssues.length} inventory imports need attention</summary>${snap.inventoryImportIssues.map((issue) => `<p><strong>${escapeHtml(issue.imageId)}</strong> · ${escapeHtml(issue.error)}<br>Attempts: ${escapeHtml(issue.attempts)} · Next retry: ${escapeHtml(new Date(issue.nextRetryAt).toLocaleString())}</p>`).join("")}</details>` : ""}
   `;
 }
 
@@ -1843,6 +1871,10 @@ $("fleetFilter").addEventListener("input", () => {
 $("fleetFolder")?.addEventListener("change", () => { if (state.snapshot) renderFleet(state.snapshot); });
 $("fleetStatus")?.addEventListener("change", () => { if (state.snapshot) renderFleet(state.snapshot); });
 $("mobileNav")?.addEventListener("click", (e) => { const button = e.target.closest("[data-mobile-view]"); if (button) setMobileView(button.dataset.mobileView); });
+
+$("detail").addEventListener("click", (event) => {
+  if (event.target.closest("#manageRpaJobs")) void rpaJobs?.open(selectedDevice());
+});
 
 $("detail").addEventListener("input", (e) => {
   if (["anchorLat", "anchorLng"].includes(e.target.id)) {
@@ -2223,9 +2255,9 @@ $("loginForm").addEventListener("submit", async (e) => {
 
 $("btnRefresh").addEventListener("click", async () => {
   $("btnRefresh").disabled = true;
-  try { await load(); await sites?.reload(); } finally { $("btnRefresh").disabled = false; }
+  try { await load(); if (!$("sitesWorkspace").hidden) await sites?.reload(); if (!$("warmupWorkspace").hidden) await warmup?.reload(); } finally { $("btnRefresh").disabled = false; }
 });
-$("btnDiagnostics")?.addEventListener("click", () => openModal("diagnosticsModal"));
+$("btnDiagnostics")?.addEventListener("click", () => { openModal("diagnosticsModal"); void load().catch(() => {}); });
 $("btnCloseDiagnostics")?.addEventListener("click", () => { closeModal("diagnosticsModal"); $("btnDiagnostics")?.focus(); });
 function openRegistration(discoveredDevice) {
   const form = $("registerForm");
@@ -2326,6 +2358,8 @@ document.addEventListener("keydown", (e) => {
     if (modal.id === "keysModal") closeKeys();
     else if (modal.id === "diagnosticsModal") $("btnCloseDiagnostics").click();
     else if (modal.classList.contains("site-modal")) sites?.closeModal(modal.id);
+    else if (modal.id === "rpaJobsModal") rpaJobs?.close();
+    else if (modal.classList.contains("wu-modal")) modal.querySelector("[data-wu-close]")?.click();
     else $("btnCancelReg").click();
     return;
   }
@@ -2348,7 +2382,20 @@ api("/auth/config").then((config) => {
 load().catch((err) => {
   if (state.authenticated !== false) $("fleetList").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
 });
-setInterval(() => load().catch(() => {}), 2500);
+function refreshVisibleWorkspace() {
+  if (document.hidden || state.authenticated === false) return;
+  if (window.ObservatoryPolling.snapshotNeeded({ hidden: document.hidden, authenticated: state.authenticated,
+    hasSnapshot: Boolean(state.snapshot), section: document.body.dataset.workspaceSection,
+    diagnosticsOpen: !$("diagnosticsModal").hidden })) {
+    void load().catch(() => {});
+  } else {
+    sites?.update();
+    warmup?.update();
+  }
+}
+setInterval(refreshVisibleWorkspace, 2500);
+document.addEventListener("visibilitychange", refreshVisibleWorkspace);
+document.addEventListener("workspacechange", refreshVisibleWorkspace);
 setInterval(() => {
   renderConnection();
   if (state.snapshot && state.snapshotAt && Date.now() - state.snapshotAt > 15_000 && !state.staleRendered) {

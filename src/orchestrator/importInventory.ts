@@ -8,6 +8,8 @@ import { carrierForUnknownIsp, simIdentifiers } from "../env/sim.js";
 import { resolveWigleCell } from "../env/wigle.js";
 import { logger } from "../logger.js";
 import { registerDevice } from "./registry.js";
+import { inventoryImportBackoff } from "./importBackoff.js";
+import { HttpError } from "../http/errors.js";
 
 const attemptsByTenant = new Map<string, Map<string, number>>();
 let attemptSequence = 0;
@@ -55,6 +57,7 @@ export async function importRemotePhones(
   let budget = config.autoImportPerPulse;
   const imageIds = remote.map(imageIdOf).filter((id): id is string => Boolean(id));
   const currentImageIds = new Set(imageIds);
+  inventoryImportBackoff.prune(tenantId, currentImageIds);
   const attempts = attemptsByTenant.get(tenantId) ?? new Map<string, number>();
   for (const id of attempts.keys()) {
     if (!currentImageIds.has(id)) attempts.delete(id);
@@ -76,8 +79,10 @@ export async function importRemotePhones(
   async function importPhone(row: RemotePhone): Promise<void> {
     const imageId = imageIdOf(row);
     if (!imageId) return;
+    const signature = JSON.stringify([existingByImage.has(imageId) ? 'backfill' : 'import', row.status, coordsOf(row)]);
 
     if (isExpiredStatus(row.status)) {
+      inventoryImportBackoff.clear(tenantId, imageId);
       skippedExpired += 1;
       await prisma.device.updateMany({
         // This inventory batch may predate a newer ON observation.
@@ -89,6 +94,7 @@ export async function importRemotePhones(
 
     const existing = existingByImage.get(imageId);
     if (existing) {
+      if (existing.proxyIsp || !config.matchProxyIsp) inventoryImportBackoff.clear(tenantId, imageId);
       if (row.name && row.name !== existing.name) {
         await prisma.device.update({ where: { id: existing.id }, data: { name: row.name } });
       }
@@ -109,15 +115,15 @@ export async function importRemotePhones(
           },
         });
       }
-      if (!existing.proxyIsp && budget > 0 && config.matchProxyIsp) {
+      if (!existing.proxyIsp && budget > 0 && config.matchProxyIsp && inventoryImportBackoff.canAttempt(tenantId, imageId, signature)) {
         attempts.set(imageId, ++attemptSequence);
         budget -= 1;
         try {
-          const info = (await getDeviceStatus(imageId, tenantId)) as RemotePhone;
-          const hint = info.proxy?.ip
-            ? await lookupProxyIsp(info.proxy.ip, config.residentialCarrier)
-            : null;
-          if (hint) {
+          await inventoryImportBackoff.run(tenantId, imageId, signature, async () => {
+            const info = (await getDeviceStatus(imageId, tenantId)) as RemotePhone;
+            if (!info?.proxy?.ip?.trim()) throw new HttpError(502, 'No proxy IP on the DuoPlus record; ISP backfill will retry after a proxy is configured');
+            const hint = await lookupProxyIsp(info.proxy.ip, config.residentialCarrier);
+            if (!hint) throw new HttpError(502, 'Proxy ISP lookup unavailable; ISP backfill will retry');
             const tower = await resolveWigleCell(
               existing.anchorLat,
               existing.anchorLng,
@@ -143,7 +149,7 @@ export async function importRemotePhones(
               },
             });
             logger.info({ imageId, carrier: hint.carrier.name, isp: hint.isp }, "backfilled ISP + cell lock");
-          }
+          }, err => err instanceof HttpError ? err.message : 'Provider information unavailable; ISP backfill will retry');
         } catch (err) {
           logger.warn({ err, imageId }, "ISP backfill skipped");
         }
@@ -151,71 +157,75 @@ export async function importRemotePhones(
       return;
     }
 
-    if (budget <= 0) return;
+    if (budget <= 0 || !inventoryImportBackoff.canAttempt(tenantId, imageId, signature)) return;
     attempts.set(imageId, ++attemptSequence);
     budget -= 1;
 
-    let info: RemotePhone = row;
-    let pin = coordsOf(row);
-    try {
-      info = ((await getDeviceStatus(imageId, tenantId)) as RemotePhone) ?? row;
-      pin = coordsOf(info) ?? pin;
-    } catch (err) {
-      logger.warn({ err, imageId }, "info lookup failed during import");
-    }
-    if (!pin) {
-      logger.warn({ imageId }, "skip import — no GPS on DuoPlus record; set a pin later");
-      return;
-    }
+    await inventoryImportBackoff.run(tenantId, imageId, signature, async () => {
+      let info: RemotePhone = row;
+      let pin = coordsOf(row);
+      let infoError: unknown;
+      try {
+        info = ((await getDeviceStatus(imageId, tenantId)) as RemotePhone) ?? row;
+        pin = coordsOf(info) ?? pin;
+      } catch (err) {
+        infoError = err;
+        logger.warn({ err, imageId }, "info lookup failed during import");
+      }
+      if (!pin) {
+        if (infoError) throw infoError;
+        throw new HttpError(502, 'No GPS coordinates on the DuoPlus record; set a pin in DuoPlus or register the phone with an explicit location');
+      }
 
-    const proxyIp = info.proxy?.ip ?? "";
-    let carrierName = config.residentialCarrier;
-    let proxyIsp = info.proxy?.isp ?? "";
-    let proxyAsn = "";
-    let proxyKind = "unknown";
-    let tz = "America/New_York";
-    let lang = "en-US";
-    if (config.matchProxyIsp && proxyIp) {
-      const hint = await lookupProxyIsp(proxyIp, config.residentialCarrier);
-      if (hint) {
-        proxyIsp = hint.isp;
-        proxyAsn = hint.asn;
-        proxyKind = hint.kind;
-        tz = hint.timezone;
-        lang = hint.language;
-        carrierName =
-          hint.normalize === "geo" || hint.kind === "unknown"
-            ? carrierForUnknownIsp(pin.lat, pin.lng).name
-            : hint.carrier.name;
+      const proxyIp = info.proxy?.ip ?? "";
+      let carrierName = config.residentialCarrier;
+      let proxyIsp = info.proxy?.isp ?? "";
+      let proxyAsn = "";
+      let proxyKind = "unknown";
+      let tz = "America/New_York";
+      let lang = "en-US";
+      if (config.matchProxyIsp && proxyIp) {
+        const hint = await lookupProxyIsp(proxyIp, config.residentialCarrier);
+        if (hint) {
+          proxyIsp = hint.isp;
+          proxyAsn = hint.asn;
+          proxyKind = hint.kind;
+          tz = hint.timezone;
+          lang = hint.language;
+          carrierName =
+            hint.normalize === "geo" || hint.kind === "unknown"
+              ? carrierForUnknownIsp(pin.lat, pin.lng).name
+              : hint.carrier.name;
+        } else {
+          carrierName = carrierForUnknownIsp(pin.lat, pin.lng).name;
+        }
       } else {
         carrierName = carrierForUnknownIsp(pin.lat, pin.lng).name;
       }
-    } else {
-      carrierName = carrierForUnknownIsp(pin.lat, pin.lng).name;
-    }
 
-    const registered = await registerDevice({
-      tenantId,
-      imageId,
-      name: row.name ?? imageId,
-      anchorLat: pin.lat,
-      anchorLng: pin.lng,
-      lookupWigle: true,
-      carrier: carrierName,
-      campaignDays: 365,
-      proxyIp,
-      proxyIsp,
-      proxyAsn,
-      proxyKind,
-      timezone: tz,
-      language: lang,
-    });
-    existingByImage.set(imageId, registered);
-    imported += 1;
-    logger.info(
-      { imageId, name: row.name, carrier: carrierName, proxyIsp, proxyKind, timezone: tz, lat: pin.lat, lng: pin.lng },
-      "auto-imported DuoPlus phone",
-    );
+      const registered = await registerDevice({
+        tenantId,
+        imageId,
+        name: row.name ?? imageId,
+        anchorLat: pin.lat,
+        anchorLng: pin.lng,
+        lookupWigle: true,
+        carrier: carrierName,
+        campaignDays: 365,
+        proxyIp,
+        proxyIsp,
+        proxyAsn,
+        proxyKind,
+        timezone: tz,
+        language: lang,
+      });
+      existingByImage.set(imageId, registered);
+      imported += 1;
+      logger.info(
+        { imageId, name: row.name, carrier: carrierName, proxyIsp, proxyKind, timezone: tz, lat: pin.lat, lng: pin.lng },
+        "auto-imported DuoPlus phone",
+      );
+    }, err => err instanceof HttpError ? err.message : 'Phone registration could not complete; import will retry');
   }
 
   for (const row of ordered) {

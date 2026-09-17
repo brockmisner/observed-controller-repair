@@ -36,10 +36,26 @@ export function tryServeStatic(req: IncomingMessage, res: ServerResponse): boole
 
   const abs = normalize(join(publicDir, pathname));
   if (!abs.startsWith(publicDir + sep)) return false;
-  if (!existsSync(abs) || !statSync(abs).isFile()) return false;
+  if (!existsSync(abs)) return false;
+  const stat = statSync(abs);
+  if (!stat.isFile()) return false;
 
   const type = MIME[extname(abs)] ?? "application/octet-stream";
-  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
-  createReadStream(abs).pipe(res);
+  const html = extname(abs) === ".html";
+  const etag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+  const headers = {
+    "Content-Type": type,
+    "Cache-Control": html ? "no-store" : pathname.startsWith("/vendor/leaflet-1.9.4/")
+      ? "public, max-age=31536000, immutable" : "public, no-cache",
+    ...(html ? {} : { ETag: etag, "Last-Modified": stat.mtime.toUTCString() }),
+  };
+  const matches = req.headers["if-none-match"]?.split(",").map((value) => value.trim());
+  if (!html && matches?.some((value) => value === "*" || value.replace(/^W\//, "") === etag.slice(2))) {
+    res.writeHead(304, headers);
+    res.end();
+    return true;
+  }
+  res.writeHead(200, { ...headers, "Content-Length": stat.size });
+  createReadStream(abs).on("error", () => res.destroy()).pipe(res);
   return true;
 }

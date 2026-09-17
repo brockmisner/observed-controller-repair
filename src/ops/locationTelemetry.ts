@@ -130,13 +130,14 @@ const safeErrors: Record<Exclude<LocationCompletionStatus, "API_ACCEPTED" | "DRY
 export async function completeLocationRequest(
   id: string,
   input: { status: LocationCompletionStatus; at: Date; apiLatencyMs: number | null; error?: string; rejectionReason?: GpsRejectionReason; rejectionDetail?: SafeGpsRejectionDetail },
+  transaction?: Prisma.TransactionClient,
 ): Promise<LocationRequest> {
   validate(identifier, id);
   const values = validate(z.object({ status: completionStatuses, at: timestamp, apiLatencyMs: duration.nullable(),
     error: z.string().optional(), rejectionReason: gpsRejectionReasonSchema.optional(),
     rejectionDetail: z.custom<SafeGpsRejectionDetail>((value) => gpsRejectionDetailText(value) !== undefined).optional(),
   }).strict().refine((value) => value.status === "API_REJECTED" || value.rejectionReason === undefined && value.rejectionDetail === undefined), input);
-  const row = await prisma.$transaction(async (tx) => {
+  const complete = async (tx: Prisma.TransactionClient) => {
     const current = await tx.locationRequest.findUnique({ where: { id } });
     if (!current) throw new HttpError(404, "Location request not found");
     requireStageTime(values.at, current.dispatchedAt ?? current.requestedAt);
@@ -162,8 +163,9 @@ export async function completeLocationRequest(
     });
     if (result.count !== 1) throw new HttpError(409, "Location request was already completed");
     return tx.locationRequest.findUniqueOrThrow({ where: { id } });
-  });
-  logLocationRequestStage(row, values.status);
+  };
+  const row = transaction ? await complete(transaction) : await prisma.$transaction(complete);
+  if (!transaction) logLocationRequestStage(row, values.status);
   return row;
 }
 

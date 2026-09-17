@@ -3,14 +3,25 @@ import { recordKey } from '../radio/schema.js';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
+import { assertNoPendingRpa } from '../queue/rpaOwnership.js';
+import { withTripLease } from '../trips/lease.js';
 import { HttpError } from '../http/errors.js';
 import { savedFolders } from '../orchestrator/folders.js';
 import { haversineMeters } from '../geo/haversine.js';
 import { parseObservedWifi,rankObservedWifi } from '../env/environmentData.js';
 import { campaignSchema,citySchema,radioSchema,liveCampaignStates,busyRunStates,remoteRunStates,dailyPlan,dayNumber,localParts,expectedTaskCount,type Task } from './model.js';
 
+export const warmupServiceIo = { withTripLease };
+
 export async function assertNoWarmup(deviceId:string,tx:Prisma.TransactionClient=prisma) {
-  if(await tx.warmupCampaign.count({where:{deviceId,OR:[{status:{in:liveCampaignStates}},{runs:{some:{status:{in:busyRunStates}}}}]}})) throw new HttpError(409,'This phone belongs to a warmup campaign. Use Warmup controls to preserve its profile and geographic assignment.');
+  const device=await tx.device.findUniqueOrThrow({where:{id:deviceId},select:{imageId:true}});
+  if(await tx.warmupCampaign.count({where:{imageId:device.imageId,OR:[{status:{in:liveCampaignStates}},{runs:{some:{status:{in:busyRunStates}}}}]}})) throw new HttpError(409,'This phone belongs to a warmup campaign. Use Warmup controls to preserve its profile and geographic assignment.');
+}
+async function assertCampaignPhoneAvailable(deviceId:string,imageId:string,tx:Prisma.TransactionClient,campaignId?:string) {
+  await assertNoPendingRpa(deviceId,tx);
+  const device=await tx.device.findUniqueOrThrow({where:{id:deviceId}});
+  if(device.imageId!==imageId||await tx.device.count({where:{imageId,activeTripId:{not:null}}})||await tx.site.count({where:{device:{imageId}}}))throw new HttpError(409,'Phone has an active trip or client assignment');
+  if(await tx.warmupCampaign.count({where:{reservedImageId:imageId,...(campaignId?{id:{not:campaignId}}:{})}}))throw new HttpError(409,'Phone is reserved by another campaign');
 }
 export async function ownCampaign(tenantId:string,id:string) {
  const c=await prisma.warmupCampaign.findFirst({where:{id,tenantId},include:{device:true,city:true}});
@@ -53,13 +64,15 @@ export async function campaignCreate(tenantId:string,raw:unknown) {
  if(!expectedTaskCount(input.durationDays,input.schedule))throw new HttpError(400,'No tasks fall within this campaign');
  if(input.folderId&&!folders?.phones.find(p=>p.imageId===device.imageId)?.groups?.some(f=>f.id===input.folderId))throw new HttpError(409,'Phone is not in that DuoPlus folder; sync the fleet or choose its current folder');
  const {schedule,...values}=input;
+ return warmupServiceIo.withTripLease(device.id,tenantId,async lease=>{
+ await lease.assertOwned();
  return prisma.$transaction(async tx=>{
   await assertNoWarmup(device.id,tx);
-  const freshDevice=await tx.device.findUniqueOrThrow({where:{id:device.id}});
-  if(freshDevice.imageId!==device.imageId||freshDevice.activeTripId||await tx.site.count({where:{deviceId:device.id}})||await tx.rpaJob.count({where:{deviceId:device.id,status:{in:['queued','submitting','submitted','unconfirmed']}}}))throw new HttpError(409,'Phone has an active trip, client assignment, or unresolved legacy RPA job');
+  await assertCampaignPhoneAvailable(device.id,device.imageId,tx);
   const row=await tx.warmupCampaign.create({data:{...values,tenantId,imageId:device.imageId,reservedImageId:device.imageId,scheduleJson:JSON.stringify(schedule)}});
   await tx.warmupEvent.create({data:{campaignId:row.id,kind:'CREATED',detail:'Existing DuoPlus image reserved; profile and app data retained.'}});
   return row;
+ });
  });
 }
 export async function materializeDays(id:string,now=new Date()) {
@@ -77,11 +90,12 @@ export async function materializeDays(id:string,now=new Date()) {
 }
 export async function campaignAction(tenantId:string,id:string,action:string,raw:unknown={}) {
  const c=await ownCampaign(tenantId,id);
- return prisma.$transaction(async tx=>{
+ const mutate=()=>prisma.$transaction(async tx=>{
   const fresh=await tx.warmupCampaign.findUniqueOrThrow({where:{id}});
   let status=fresh.status,detail='';
   if(action==='start'||action==='resume') {
    if(!['DRAFT','PAUSED','NEEDS_ATTENTION'].includes(status))throw new HttpError(409,'Campaign cannot start from its current state');
+   await assertCampaignPhoneAvailable(c.deviceId,c.imageId,tx,c.id);
    if(await tx.warmupRun.count({where:{campaignId:id,status:'UNCONFIRMED'}}))throw new HttpError(409,'Resolve uncertain remote tasks before resuming');
    status='RUNNING';detail='Daily schedule enabled; missed days are recorded, never replayed in a burst.';
   } else if(action==='pause') {if(!['RUNNING','NEEDS_ATTENTION'].includes(status))throw new HttpError(409,'Campaign is not running');status='PAUSED';detail='New dispatches paused. In-flight provider tasks remain tracked until their outcome is known.';}
@@ -93,13 +107,14 @@ export async function campaignAction(tenantId:string,id:string,action:string,raw
   } else if(action==='extend') {
    const {durationDays}=z.object({durationDays:z.number().int().min(3).max(730)}).strict().parse(raw);
    if(durationDays<=fresh.durationDays||status==='CANCELLED')throw new HttpError(400,'Choose a longer duration for an uncancelled campaign');
-   const conflicts=await tx.warmupCampaign.count({where:{deviceId:c.deviceId,id:{not:id},status:{in:liveCampaignStates}}});if(conflicts)throw new HttpError(409,'Phone is reserved by another campaign');
+   await assertCampaignPhoneAvailable(c.deviceId,c.imageId,tx,c.id);
    await tx.warmupCampaign.update({where:{id},data:{durationDays,reservedImageId:c.imageId,status:status==='COMPLETED'?'PAUSED':status,completedAt:null}});
    await tx.warmupEvent.create({data:{campaignId:id,kind:'EXTENDED',detail:`Duration extended from ${fresh.durationDays} to ${durationDays} days.`}});return {ok:true};
   } else throw new HttpError(404,'Unknown campaign action');
-  await tx.warmupCampaign.update({where:{id},data:{status,error:null,...(status==='RUNNING'&&!fresh.activatedAt?{activatedAt:new Date()}:{}),...(status==='CANCELLED'?{completedAt:new Date(),reservedImageId:null}: {})}});
+  await tx.warmupCampaign.update({where:{id},data:{status,error:null,...(status==='RUNNING'?{reservedImageId:c.imageId,...(!fresh.activatedAt?{activatedAt:new Date()}: {})}:{}),...(status==='CANCELLED'?{completedAt:new Date(),reservedImageId:null}: {})}});
   await tx.warmupEvent.create({data:{campaignId:id,kind:action.toUpperCase(),detail}});return {ok:true};
  });
+ return ['start','resume','extend'].includes(action)?warmupServiceIo.withTripLease(c.deviceId,tenantId,async lease=>{await lease.assertOwned();return mutate();}):mutate();
 }
 export async function resolveRun(tenantId:string,id:string,raw:unknown) {
  const input=z.object({outcome:z.enum(['FAILED','CANCELLED']),remoteStopped:z.literal(true),note:z.string().trim().min(5).max(500)}).strict().parse(raw);

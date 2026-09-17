@@ -61,16 +61,29 @@ export interface GpsDispatchOptions {
   onDispatched?: (tx: Prisma.TransactionClient, records: LocationRequest[]) => Promise<void>;
 }
 
-async function commitProposal(tx: Prisma.TransactionClient, entry: GpsProposal, at: Date, intervalMs: number | null, tripId?: string, siteId?: string): Promise<void> {
+function proposalState(device: Device): Prisma.DeviceWhereInput {
+  return {
+    id: device.id, tenantId: device.tenantId, imageId: device.imageId,
+    active: device.active, activeTripId: device.activeTripId, lastTickAt: device.lastTickAt,
+    anchorLat: device.anchorLat, anchorLng: device.anchorLng, movementRadiusM: device.movementRadiusM,
+    currentLat: device.currentLat, currentLng: device.currentLng, phase: device.phase,
+    routeProgressM: device.routeProgressM, polylineJson: device.polylineJson, transitMode: device.transitMode,
+  };
+}
+
+function latestDispatch(record: LocationRequest): Prisma.DeviceWhereInput {
+  return { locationRequests: { none: { id: { not: record.id }, dispatchedAt: { gte: record.dispatchedAt! } } } };
+}
+
+async function commitProposal(tx: Prisma.TransactionClient, entry: GpsProposal, record: LocationRequest): Promise<boolean> {
   const { device, proposed } = entry;
+  const at = record.dispatchedAt!;
+  const intervalMs = record.dispatchIntervalMs;
   const speed = intervalMs && intervalMs > 0 ?
     haversineMeters(device.currentLat, device.currentLng, proposed.currentLat, proposed.currentLng) / (intervalMs / 1000) : 0;
   const updated = await tx.device.updateMany({
     where: {
-      AND: [gpsEligibility(device.tenantId, [device.id], at, tripId, siteId)], id: device.id,
-      anchorLat: device.anchorLat, anchorLng: device.anchorLng, movementRadiusM: device.movementRadiusM,
-      currentLat: device.currentLat, currentLng: device.currentLng, phase: device.phase,
-      routeProgressM: device.routeProgressM, polylineJson: device.polylineJson, transitMode: device.transitMode,
+      AND: [proposalState(device), latestDispatch(record)],
     },
     data: {
       currentLat: proposed.currentLat, currentLng: proposed.currentLng,
@@ -81,13 +94,15 @@ async function commitProposal(tx: Prisma.TransactionClient, entry: GpsProposal, 
       phase: proposed.phase, transitMode: proposed.transitMode,
     },
   });
-  if (updated.count !== 1) throw new HttpError(409, "GPS update skipped: device state changed before dispatch");
+  // Preserve late acceptance evidence without overwriting newer movement or operator edits.
+  if (updated.count !== 1) return false;
   await tx.telemetryTick.create({ data: {
     deviceId: device.id, lat: proposed.currentLat, lng: proposed.currentLng,
     altitudeM: proposed.lastAltitudeM, accuracyM: proposed.lastAccuracyM,
     speedMps: device.phase === "STATIONARY" ? speed : proposed.lastSpeedMps,
     bearing: proposed.lastBearing, phase: proposed.phase, createdAt: at,
   } });
+  return true;
 }
 
 // Producers hold reserveMovement; site setup holds the exclusive environment window.
@@ -104,6 +119,23 @@ export async function dispatchGps(entries: GpsProposal[], source: LocationReques
   let startedAt: Date | undefined;
   let startMono: number | undefined;
   let completedWithoutError = false;
+  const complete = async (record: LocationRequest, entry: GpsProposal, input: Parameters<typeof completeLocationRequest>[1]) => {
+    const result = await prisma.$transaction(async (tx) => {
+      const row = await completeLocationRequest(record.id, input, tx);
+      let advanced = false;
+      if (row.status === "API_ACCEPTED") advanced = await commitProposal(tx, entry, row);
+      else if (row.status === "UNCONFIRMED" && !options.tripId && !options.siteId && entry.device.phase === "NAVIGATING") {
+        // Legacy movement has no trip reconciliation loop. Hold it for explicit review after a lost response.
+        await tx.device.updateMany({ where: { AND: [proposalState(entry.device), latestDispatch(row)] },
+          data: { active: false, lastSpeedMps: 0 } });
+      }
+      return { row, advanced };
+    });
+    completed.add(record.id);
+    logLocationRequestStage(result.row);
+    if (result.row.status === "API_ACCEPTED" && !result.advanced) logger.warn({ requestId: record.id, deviceId: entry.device.id },
+      "GPS acceptance retained; newer device state prevented model advancement");
+  };
   try {
     for (const entry of entries) {
       const queuedAt = performance.now();
@@ -135,7 +167,10 @@ export async function dispatchGps(entries: GpsProposal[], source: LocationReques
         const rows: LocationRequest[] = [];
         for (const { record, entry, queuedAt } of requests) {
           const dispatchIntervalMs = pacing.intervalSinceDispatch(entry.device.id);
-          await commitProposal(tx, entry, at, dispatchIntervalMs, options.tripId, options.siteId);
+          if (await tx.device.count({ where: { AND: [proposalState(entry.device),
+            gpsEligibility(tenantId, [entry.device.id], at, options.tripId, options.siteId)] } }) !== 1) {
+            throw new HttpError(409, "GPS update skipped: device state changed before dispatch");
+          }
           rows.push(await markLocationDispatched(record.id, { at, dispatchIntervalMs, queueDelayMs: performance.now() - queuedAt }, tx));
         }
         await options.onDispatched?.(tx, rows);
@@ -151,17 +186,16 @@ export async function dispatchGps(entries: GpsProposal[], source: LocationReques
     const apiLatencyMs = startMono === undefined ? null : performance.now() - startMono;
     for (const { record, entry } of requests) {
       const status = classifyGpsAcceptance(result, entry.device.imageId);
-      await completeLocationRequest(record.id, { status, at, apiLatencyMs,
+      await complete(record, entry, { status, at, apiLatencyMs,
         rejectionReason: status === "API_REJECTED" ? readGpsRejectionReason(result, entry.device.imageId) : undefined,
         rejectionDetail: status === "API_REJECTED" ? readGpsRejectionDetail(result, entry.device.imageId) : undefined });
-      completed.add(record.id);
     }
     completedWithoutError = true;
     return prisma.locationRequest.findMany({ where: { id: { in: requests.map(({ record }) => record.id) } } });
   } catch (error) {
-    for (const { record } of requests) {
+    for (const { record, entry } of requests) {
       if (completed.has(record.id)) continue;
-      await completeLocationRequest(record.id, {
+      await complete(record, entry, {
         status: startedAt ? "UNCONFIRMED" : error instanceof HttpError && error.status === 409 ? "SKIPPED" : "FAILED",
         at: new Date(), apiLatencyMs: startMono === undefined ? null : performance.now() - startMono,
       });

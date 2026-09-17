@@ -37,7 +37,7 @@
 
   window.ObservatorySites = {
     create({ api, icon, openModal, closeModal, showDevices }) {
-      const s = { sites: [], devices: [], jobs: [], results: [], selectedId: null, resultId: null, view: "sites", authenticated: false, version: 0, lastLoad: 0, loading: null, busy: false, active: true, keyword: "", resultApp: "", map: null, layer: null, fitted: false, inspectorSignature: "", settingsDirty: false, settingsDraft: null };
+      const s = { readiness: null, sites: [], devices: [], jobs: [], results: [], selectedId: null, resultId: null, view: "sites", authenticated: false, version: 0, lastLoad: 0, loading: null, busy: false, active: true, keyword: "", resultApp: "", map: null, layer: null, fitted: false, inspectorSignature: "", settingsDirty: false, settingsDraft: null };
       let returnFocus = null;
       const disable = () => s.busy ? " disabled" : "";
       const currentSite = () => s.sites.find((site) => site.id === s.selectedId);
@@ -107,6 +107,7 @@
         });
         if (s.active) { ensureMap(); requestAnimationFrame(() => { s.map?.invalidateSize(); if (!s.fitted) fitMap(); }); reload().catch(() => {}); }
         else if (section === "devices") showDevices();
+        document.dispatchEvent(new Event("workspacechange"));
       }
 
       function ensureMap() {
@@ -172,12 +173,13 @@
         if (!site) { byId("siteInspector").innerHTML = '<div class="empty">Select a client.</div>'; s.inspectorSignature = ""; return; }
         const jobs = siteJobs(site);
         const selectedResult = s.results.find((result) => result.id === s.resultId && result.site?.id === site.id);
-        const signature = JSON.stringify([site, jobs, selectedResult, s.busy]);
+        const signature = JSON.stringify([site, jobs, selectedResult, s.busy, s.readiness]);
         if (!force && (signature === s.inspectorSignature || s.settingsDirty)) return;
         const scroll = byId("siteInspector").scrollTop;
         s.inspectorSignature = signature;
         const profile = site.profile;
         const warnings = Array.isArray(profile?.warnings) ? profile.warnings : [];
+        const canSchedule = site.enabled && s.readiness?.ready === true;
         const canApply = Boolean(profile && site.profileRevision && site.status === "PREPARED");
         const source = typeof profile?.source === "string" ? profile.source : profile?.source?.type;
         byId("siteInspector").innerHTML = `
@@ -192,7 +194,7 @@
             <label class="site-check-label"><input type="checkbox" data-site-weekly${site.weeklyRefresh ? " checked" : ""}${disable()} />Refresh WiGLE library weekly</label>
             ${jsonDetails("Prepared profile", profile)}
           </section>
-          <section class="site-section"><div class="site-section-heading"><h4>Jobs</h4><button type="button" class="btn ghost" data-site-action="schedule"${s.busy || !site.enabled ? " disabled" : ""}>${icon("plus")}Schedule job</button></div>
+          <section class="site-section"><div class="site-section-heading"><h4>Jobs</h4><button type="button" class="btn ghost" data-site-action="schedule"${s.busy || !canSchedule ? " disabled" : ""}>${icon("plus")}Schedule job</button></div>
             <label class="site-check-label"><input type="checkbox" data-enable-site="${escape(site.id)}"${site.enabled ? " checked" : ""}${disable()} />Jobs enabled</label>
             ${!site.templateId ? '<p class="site-warning">Automation template ID is not configured.</p>' : ""}
             ${jobs.length ? jobs.map((job) => {
@@ -209,7 +211,12 @@
         byId("siteInspector").scrollTop = scroll;
       }
 
-      function render(force = false) { renderRecords(); renderMap(); renderInspector(force); }
+      function render(force = false) {
+        const warning = byId("sitesReadiness");
+        warning.hidden = !s.authenticated || s.readiness?.ready === true;
+        warning.textContent = s.readiness ? `Job scheduling unavailable. ${(s.readiness.issues || []).join(" ")}` : "Job scheduling readiness has not been confirmed. Reload clients to check configuration.";
+        renderRecords(); renderMap(); renderInspector(force);
+      }
 
       function selectSite(id, resultId = null, focus = true) {
         if (!s.sites.some((site) => site.id === id)) return;
@@ -222,7 +229,7 @@
       }
 
       async function reload(force = false) {
-        if (!s.authenticated || (!force && (!s.active || Date.now() - s.lastLoad < 10000))) return;
+        if (!s.authenticated || (!force && (document.hidden || !s.active || Date.now() - s.lastLoad < 10000))) return;
         if (s.loading) return s.loading;
         const version = s.version;
         const keyword = s.keyword;
@@ -234,6 +241,7 @@
           try {
             const [snapshot, results] = await Promise.all([api("/api/sites"), api(`/api/site-results${query.size ? `?${query}` : ""}`)]);
             if (version !== s.version || keyword !== s.keyword || resultApp !== s.resultApp) return;
+            s.readiness = snapshot.readiness || null;
             s.sites = Array.isArray(snapshot.sites) ? snapshot.sites.map((site) => ({ ...site, status: site.profileStatus, lang: site.language, motion: site.state, lastError: site.profileError })) : [];
             s.devices = Array.isArray(snapshot.devices) ? snapshot.devices : [];
             s.jobs = Array.isArray(snapshot.jobs) ? snapshot.jobs : [];
@@ -296,6 +304,7 @@
       }
 
       function openSchedule(site) {
+        if (!s.readiness?.ready) { message("Job scheduling is unavailable until the configuration issues above are resolved.", true); return; }
         if (!site.enabled) return;
         const form = byId("siteScheduleModalForm"); form.reset();
         form.dataset.siteId = site.id;
@@ -465,7 +474,7 @@
         closeModal: closeSiteModal,
         clear() {
           s.version += 1; s.authenticated = false; s.loading = null; s.busy = false; s.lastLoad = 0;
-          s.sites = []; s.devices = []; s.jobs = []; s.results = []; s.selectedId = null; s.resultId = null; s.fitted = false; s.settingsDirty = false; s.settingsDraft = null; s.inspectorSignature = ""; s.keyword = ""; s.resultApp = "";
+          s.readiness = null; byId("sitesReadiness").hidden = true; s.sites = []; s.devices = []; s.jobs = []; s.results = []; s.selectedId = null; s.resultId = null; s.fitted = false; s.settingsDirty = false; s.settingsDraft = null; s.inspectorSignature = ""; s.keyword = ""; s.resultApp = "";
           byId("siteSearch").value = ""; byId("siteResultFilter").reset();
           byId("siteCreateModalForm").elements.deviceId.textContent = "";
           for (const id of ["siteScheduleName", "siteScheduleTimezone", "siteImportName", "siteResolveName"]) byId(id).textContent = "";

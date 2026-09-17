@@ -1,5 +1,6 @@
 import { Redis } from "ioredis";
 import { config } from "../config.js";
+import { producerRedisOptions } from "./redisOptions.js";
 
 export function createRedis(): Redis {
   if (config.redisUrl) {
@@ -14,3 +15,7 @@ export function createRedis(): Redis {
 }
 
 export const redisConnection = createRedis();
+
+export const producerConnection = config.redisUrl
+  ? new Redis(config.redisUrl, producerRedisOptions)
+  : new Redis({ host: config.redisHost, port: config.redisPort, password: config.redisPassword, ...producerRedisOptions });
