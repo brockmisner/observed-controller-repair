@@ -1,3 +1,4 @@
+import { adbPreflight } from './adb-preflight.mjs';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 
@@ -27,4 +28,5 @@ const migrationArgs = provider === 'postgresql'
   ? ['migrate', 'deploy', '--schema', 'prisma/postgresql/schema.prisma']
   : ['db', 'push', '--skip-generate', '--schema', 'prisma/schema.prisma'];
 const migrationCode = await run('./node_modules/.bin/prisma', migrationArgs);
+if (!migrationCode) void adbPreflight();
 process.exitCode = migrationCode || await run(process.execPath, ['dist/index.js']);
