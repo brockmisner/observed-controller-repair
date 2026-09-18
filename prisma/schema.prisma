@@ -524,3 +524,38 @@ model WarmupEvent {
   createdAt DateTime @default(now())
   @@index([campaignId, createdAt])
 }
+
+model RadioEvidence {
+  id              String   @id
+  tenantId        String
+  imageId         String
+  tripId          String
+  deviceId        String
+  sessionId       String
+  bootId          String
+  instanceId      String
+  datasetRevision String
+  sequence        Int
+  simElapsedMs    Int
+  phase           String
+  kind            String
+  lifecycle       String?
+  applied         Boolean  @default(false)
+  uncertain       Boolean  @default(false)
+  duplicate       Boolean  @default(false)
+  current         Boolean  @default(true)
+  evidenceClass   String
+  source          String
+  clockDomain     String
+  frameHash       String?
+  servingCell     String?
+  handoverFrom    String?
+  handoverTo      String?
+  detail          String
+  payloadJson     String
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, imageId, tripId, sequence])
+  @@index([tenantId, sessionId, sequence])
+  @@index([tenantId, imageId, current])
+}
