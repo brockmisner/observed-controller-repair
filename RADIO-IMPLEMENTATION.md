@@ -105,6 +105,14 @@ Existing city JSON remains compatible but lacks fields previously stripped at im
 Reimporting richer saved uploads can restore their existing metadata; it cannot invent
 missing frequency, cell identity, antenna orientation, or coverage.
 
+## Service-area datasets
+
+City JSON remains supported for small areas. A client service area of 5–10 miles is stored instead as a
+tiled, revisioned dataset, and each phone loads only the tiles its own reception radii reach, so the
+engine's 10,000-observation session limit is respected without dropping coverage. Ingest from WiGLE is
+resumable across the provider's daily query allowance. See `SERVICE-AREA-DATASETS.md` for the storage
+model, measured costs, and what the saved Wi-Fi, cellular and Bluetooth data can actually support.
+
 ## Verification commands
 
 `npm test`, `npm run test:warmup`, `npm run build`.

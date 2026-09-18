@@ -1,4 +1,5 @@
 import { handleWarmupRequest } from "./warmup.js";
+import { handleCoverageRequest } from "./coverage.js";
 import { assertNoWarmup } from "../warmup/service.js";
 import { savedFolders } from "../orchestrator/folders.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -161,9 +162,24 @@ async function snapshot(tenantId?: string) {
       recordsPresent: typeof json === "string" && json !== "[]" && json.length > 2,
     });
   }
+  const areaRevisions = await prisma.areaDatasetRevision.findMany({
+    where: { status: "COMPLETE", recordCount: { gt: 0 }, ...(tenantId ? { dataset: { tenantId } } : {}) },
+    select: { revision: true, recordCount: true, dataset: { select: { id: true, tenantId: true } } },
+  });
+  const areaByTenant = new Map<string, { revision: string; recordsPresent: boolean }>();
+  for (const row of areaRevisions) {
+    if (areaByTenant.has(row.dataset.tenantId)) continue;
+    areaByTenant.set(row.dataset.tenantId, {
+      revision: `${row.dataset.id}:${row.revision}`,
+      recordsPresent: row.recordCount > 0,
+    });
+  }
   const devices = await Promise.all(deviceRows.map(async ({ environment, locationRequests, drivingTrips, events: verificationEvents, ...device }) => {
     const trip = drivingTrips[0] ? await getTrip(device.tenantId, drivingTrips[0].id) : null;
     const arrival = trip ? tripArrivalSnapshot(trip.id) : undefined;
+    const cityDataset = datasets.get(device.id);
+    const areaDataset = areaByTenant.get(device.tenantId);
+    const dataset = cityDataset?.recordsPresent ? cityDataset : areaDataset ?? cityDataset ?? { revision: null, recordsPresent: false };
     return {
       ...device,
       playerVerificationSupported: Boolean(device.imageId),
@@ -178,7 +194,7 @@ async function snapshot(tenantId?: string) {
         mnc: device.mnc,
         nowMs: Date.now(),
         trip: trip ? { id: trip.id, status: trip.status } : null,
-        dataset: datasets.get(device.id) ?? { revision: null, recordsPresent: false },
+        dataset,
         playerReadiness: playerLifecycle.lastReadiness(device.imageId) ?? null,
         verification: readVerificationRecord(verificationEvents[0]?.detail, device),
         arrival: arrival ?? null,
@@ -234,6 +250,7 @@ async function snapshot(tenantId?: string) {
   };
 }
 
+/** Routes one HTTP request and translates expected failures into JSON error responses. */
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -314,6 +331,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     const auth = await readAuth(req);
     if (await handleWarmupRequest(req, res, url, auth?.tenantId)) return;
+    if (await handleCoverageRequest(req, res, url, auth?.tenantId)) return;
     if (await handleSiteRequest(req, res, url, auth?.tenantId)) return;
     if (await handleTripRequest(req, res, url, auth?.tenantId)) return;
     if (config.authRequired && !auth && path !== "/health") {
