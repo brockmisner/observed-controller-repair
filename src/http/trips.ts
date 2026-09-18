@@ -1,4 +1,4 @@
-import { playerImage } from "../trips/playerConnection.js";
+import { playerImageIds } from "../trips/playerConnection.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { prisma } from "../db.js";
@@ -109,7 +109,8 @@ export async function handleTripRequest(req: IncomingMessage, res: ServerRespons
       queryKeys(url, []);
       if (method !== "GET") methodNotAllowed(res, ["GET"]);
       send(res, 200, { configured: true, provider: "OSRM", trafficAvailable: false, minimumIntervalMs: 1100, maxTripMinutes: 120,
-        playbackMode: "REST_CHECKPOINTS", continuousPlayback: false, playerImageId: playerImage() || null });
+        playbackMode: "REST_CHECKPOINTS", continuousPlayback: false,
+        playerImageIds: playerImageIds(), playerImageId: playerImageIds()[0] ?? null });
       return true;
     }
     if (path === "/api/trips/geocode") {

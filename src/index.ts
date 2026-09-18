@@ -1,5 +1,5 @@
 import { recoverWarmup, startWarmupPlanner } from "./warmup/runner.js";
-import { initializePlayer } from "./trips/playerConnection.js";
+import { initializePlayers } from "./trips/playerConnection.js";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   await prisma.$connect();
   await recoverInterruptedEnvironments();
   await recoverTrips();
-  await initializePlayer();
+  await initializePlayers();
   await recoverSiteWork();
   await recoverWarmup();
   await keyPool.ensureRows();

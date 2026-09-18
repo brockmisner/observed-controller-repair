@@ -8,7 +8,11 @@ import { withPlayer, usesPlayer, observePlayerPhone } from './playerConnection.j
 import { terminal, type PlayerStatus } from './playerProtocol.js';
 import { PlayerPlanCache } from './playerPlan.js';
 import type { TripLease } from './lease.js';
+import { authorizeImageWriter, prismaImageOwnershipStore } from './imageOwnership.js';
+import { playerLifecycle, type PhonePowerState } from './playerReadiness.js';
 import { ensureTripMaps } from './phoneSync.js';
+import { closeTripRadio, feedIdentifiedTripGps, pauseTripRadio, tripArrivalSnapshot } from '../radio/tripFeed.js';
+import { destinationPolicy, durableLocationAfterTrip } from '../radio/destinationPolicy.js';
 const planCache = new PlayerPlanCache();
 interface PlayerState {
   sessionId: string; offsetMs: number; instanceId?: string; started?: boolean;
@@ -25,6 +29,11 @@ async function store(trip: DrivingTrip, player: PlayerState) {
   trip.phoneSyncJson = JSON.stringify(sync);
 }
 function matched(s: PlayerStatus, p: PlayerState) {
+  // Other deployments drive these phones over ADB without seeing this controller's lease. A live
+  // session we did not open is named as such instead of being reported as our own restart.
+  if (s.session_id && s.session_id !== p.sessionId && (!p.instanceId || s.instance_id === p.instanceId)) {
+    throw new HttpError(409, 'Another writer owns this player session. This controller did not open it and did not replay anything.');
+  }
   if (s.session_id !== p.sessionId || (p.instanceId && s.instance_id !== p.instanceId)) {
     throw new HttpError(409, 'Player restarted or session changed. No automatic replay was attempted.');
   }
@@ -33,7 +42,7 @@ export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
   try {
     const p = playerState(trip);
     if (!p) return;
-    const status = await withPlayer(async c => {
+    const status = await withPlayer(trip.imageId, async c => {
       const current = await c.request({ op: 'status' });
       // A fresh instance with successful recovery has no active providers or session.
       if (current.state === 'IDLE' && current.session_id === '' && current.cleanup_ok) return current;
@@ -43,18 +52,28 @@ export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
     if (!status.cleanup_ok || (!terminal(status) && status.state !== 'IDLE')) throw new HttpError(409, 'Player provider cleanup is unconfirmed. Ownership is retained.');
     if (status.session_id === p.sessionId) await recordProgress(trip, { ...p, status, checkedAt: new Date().toISOString() });
     else await store(trip, { ...p, status, checkedAt: new Date().toISOString() });
-  } finally { planCache.delete(trip.id); }
+    playerLifecycle.release(trip.imageId, p.sessionId);
+  } finally { planCache.delete(trip.id); closeTripRadio(trip.id); }
+}
+/** Cached provider power state. The trip start path still confirms power with the provider. */
+async function lastKnownPower(deviceId: string): Promise<PhonePowerState> {
+  const device = await prisma.device.findUnique({ where: { id: deviceId }, select: { poweredOn: true, duoPlusStatus: true } });
+  if (!device) return 'UNKNOWN';
+  if (device.poweredOn && device.duoPlusStatus === 1) return 'ON';
+  if (device.duoPlusStatus === 10 || device.duoPlusStatus === 11) return 'STARTING';
+  return device.poweredOn ? 'UNKNOWN' : 'OFF';
 }
 export async function preparePlayerStart(trip: DrivingTrip): Promise<void> {
   if (!usesPlayer(trip.imageId)) return;
   if (config.dryRun) throw new HttpError(409, 'Player driving is disabled in dry-run mode');
   if (JSON.parse(trip.arrivalWifiJson).enabled) throw new HttpError(409, 'Disable arrival Wi-Fi for device-side playback.');
-  // Physical-image scope prevents two workspace rows from driving the same phone.
-  if (await prisma.device.count({ where: { imageId: trip.imageId, id: { not: trip.deviceId }, activeTripId: { not: null } } })) {
-    throw new HttpError(409, 'Another workspace trip owns this physical phone. Cancel it first.');
-  }
-  const status = await withPlayer(c => c.request({ op: 'status' })).catch(() => { throw new HttpError(409, 'DuoMove Player is unreachable. Open the app on the phone and check ADB.'); });
-  if (!status.cleanup_ok || !(status.state === 'IDLE' || terminal(status))) throw new HttpError(409, 'DuoMove Player already has a session or needs provider cleanup.');
+  // Physical-image scope prevents two workspace rows or a campaign reservation from driving the same phone.
+  await authorizeImageWriter(trip.tenantId, trip.imageId, prismaImageOwnershipStore);
+  const power = await lastKnownPower(trip.deviceId);
+  let readiness = await playerLifecycle.check(trip.imageId, { power });
+  // A restart is recorded on the first check; the phone may still be ready for a new session.
+  if (readiness.code === 'RESTARTED') readiness = await playerLifecycle.check(trip.imageId);
+  if (!readiness.ready) throw new HttpError(409, `${readiness.detail} (${readiness.code}).`);
 }
 async function recordProgress(trip: DrivingTrip, p: PlayerState) {
   const status = p.status!;
@@ -74,9 +93,82 @@ async function recordProgress(trip: DrivingTrip, p: PlayerState) {
     } });
   });
   trip.phoneSyncJson = JSON.stringify(sync);
-  if (sample) { trip.elapsedMs = Math.round(sample.model_ms); trip.progressM = sample.distance_m; }
+  if (sample) {
+    trip.elapsedMs = Math.round(sample.model_ms); trip.progressM = sample.distance_m;
+    const instanceId = p.instanceId ?? p.sessionId;
+    const completed = terminal(status) && status.state === 'COMPLETED';
+    await feedIdentifiedTripGps({
+      trip, fix: {
+        lat: sample.lat, lng: sample.lon, accuracyM: sample.accuracy_m, speedMps: sample.speed_mps,
+        elapsedMs: Math.round(sample.model_ms), nowElapsedMs: Math.round(sample.model_ms),
+        sequence: status.applied_seq, wallMs: Date.now(), bootId: `unanchored:${instanceId}`, instanceId,
+      },
+      playerGpsCleaned: completed,
+    });
+  }
 }
+async function finishPlayerArrival(trip: DrivingTrip): Promise<void> {
+  const arrival = tripArrivalSnapshot(trip.id);
+  if (!arrival?.canReleasePhone) {
+    await prisma.drivingTrip.updateMany({
+      where: { id: trip.id, revision: trip.revision, status: { in: ['RUNNING', 'ARRIVING'] } },
+      data: {
+        status: 'ARRIVING', nextTickAt: new Date(Date.now() + 1000),
+        pauseReason: arrival?.detail ?? 'Waiting for radio observation; GPS providers may already be cleaned',
+        error: null,
+      },
+    });
+    await prisma.device.updateMany({
+      where: { id: trip.deviceId, activeTripId: trip.id },
+      data: { lastSpeedMps: 0, phase: 'STATIONARY' },
+    });
+    return;
+  }
+  const device = await prisma.device.findFirst({ where: { id: trip.deviceId } });
+  const destination = JSON.parse(trip.routeJson).destination as { lat: number; lng: number };
+  const held = durableLocationAfterTrip(
+    arrival.destinationPolicy ?? destinationPolicy(),
+    destination,
+    device ? { lat: device.anchorLat, lng: device.anchorLng } : destination,
+  );
+  await prisma.$transaction(async tx => {
+    await tx.drivingTrip.update({ where: { id: trip.id }, data: { status: 'ARRIVED', arrivedAt: new Date(), finishedAt: new Date(), nextTickAt: null, pauseReason: null, error: null } });
+    await tx.device.updateMany({
+      where: { id: trip.deviceId, activeTripId: trip.id },
+      data: {
+        activeTripId: null, active: false, phase: 'STATIONARY', transitMode: null, lastSpeedMps: 0,
+        currentLat: held.lat, currentLng: held.lng,
+      },
+    });
+  });
+  planCache.delete(trip.id);
+  closeTripRadio(trip.id);
+}
+
+async function pollPlayerArrival(trip: DrivingTrip): Promise<void> {
+  const p = playerState(trip);
+  const instanceId = p?.instanceId ?? p?.sessionId ?? trip.revision;
+  const destination = JSON.parse(trip.routeJson).destination as { lat: number; lng: number };
+  await feedIdentifiedTripGps({
+    trip,
+    fix: {
+      lat: trip.acceptedLat ?? destination.lat,
+      lng: trip.acceptedLng ?? destination.lng,
+      accuracyM: 8, speedMps: 0,
+      elapsedMs: Math.round(trip.elapsedMs), nowElapsedMs: Math.round(trip.elapsedMs),
+      sequence: Math.max(0, Math.round(trip.elapsedMs / 1000)),
+      wallMs: Date.now(), bootId: `unanchored:${instanceId}`, instanceId,
+    },
+    playerGpsCleaned: true,
+  });
+  await finishPlayerArrival(trip);
+}
+
 export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promise<void> {
+  if (trip.status === 'ARRIVING') {
+    await pollPlayerArrival(trip);
+    return;
+  }
   const requireOwner = async () => {
     await lease.assertOwned();
     if (!await prisma.drivingTrip.count({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING',
@@ -91,10 +183,11 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
       await ensureTripMaps(trip, JSON.parse(trip.routeJson).destination, requireOwner);
       p = { sessionId: randomUUID(), offsetMs: trip.elapsedMs };
       await store(trip, p); // Persist identity BEFORE sending any command.
+      playerLifecycle.authorize(trip.imageId, p.sessionId);
     }
     const player = p;
     const { bytes, sha256 } = planCache.get(trip, player);
-    const status = await withPlayer(async c => {
+    const status = await withPlayer(trip.imageId, async c => {
       let s = await c.request({ op: 'status' });
       if (player.instanceId && s.instance_id !== player.instanceId) throw new Error('Player restarted');
       if (!player.instanceId) { player.instanceId = s.instance_id; await store(trip, player); }
@@ -126,15 +219,11 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
     });
     player.status = status; player.checkedAt = new Date().toISOString();
     if (status.applied_seq >= 2 && status.applied_seq - (player.observedSeq ?? -100) >= 10) {
-      try { player.phoneObservation = await observePlayerPhone(); player.observedSeq = status.applied_seq; } catch { /* Player acknowledgments remain distinct from readback. */ }
+      try { player.phoneObservation = await observePlayerPhone(trip.imageId); player.observedSeq = status.applied_seq; } catch { /* Player acknowledgments remain distinct from readback. */ }
     }
     await recordProgress(trip, player);
     if (status.state === 'COMPLETED' && status.cleanup_ok) {
-      await prisma.$transaction(async tx => {
-        await tx.drivingTrip.update({ where: { id: trip.id }, data: { status: 'ARRIVED', arrivedAt: new Date(), finishedAt: new Date(), nextTickAt: null, pauseReason: null, error: null } });
-        await tx.device.updateMany({ where: { id: trip.deviceId, activeTripId: trip.id }, data: { activeTripId: null, active: false, phase: 'STATIONARY', transitMode: null, lastSpeedMps: 0 } });
-      });
-      planCache.delete(trip.id);
+      await finishPlayerArrival(trip);
     } else if (terminal(status)) throw new Error(`Player stopped: ${status.error || status.state}`);
     else await prisma.drivingTrip.updateMany({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING' }, data: {
       nextTickAt: new Date(Date.now() + 1500), pauseReason: null, error: null,
@@ -146,7 +235,10 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
   } catch (error) {
     // No further heartbeats after failure. Cancel if reachable; retain ownership either way.
     let cleanup = false;
-    try { await stopPlayerTrip(trip); cleanup = true; } catch { /* 15-second device lease remains the fallback. */ }
+    try {
+      await pauseTripRadio(trip.id, 'Player connection lost or failed; radio state is not assumed applied');
+      await stopPlayerTrip(trip); cleanup = true;
+    } catch { /* 15-second device lease remains the fallback. */ }
     const reason = cleanup ? 'Player stopped. Review the phone and Resume explicitly.' : 'Player connection lost. Stop is unconfirmed; ownership retained. Retry Cancel after reconnecting.';
     await prisma.drivingTrip.updateMany({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING' }, data: {
       status: 'PAUSED', nextTickAt: null, lastStepAt: null, pauseReason: reason, error: reason,

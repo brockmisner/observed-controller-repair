@@ -12,6 +12,7 @@ import { reserveMovement, withEnvironmentWindow } from "../orchestrator/deviceOp
 import { dispatchGps, gpsEligibility, gpsIsDue } from "../orchestrator/locationDispatch.js";
 import { checkDevicePower, recordPowerObservation } from "../orchestrator/powerCheck.js";
 import { withTripLease, type TripLease } from "./lease.js";
+import { feedIdentifiedTripGps, expireTripRadio, tripArrivalSnapshot } from "../radio/tripFeed.js";
 import { readRetryableCheckpoint } from "./retryCheckpoint.js";
 import { createRouteTimeline } from "./routeTimeline.js";
 import { validateDrivingRoute } from "./routes.js";
@@ -126,7 +127,7 @@ async function runStep(id: string): Promise<void> {
   }
   await withTripLease(initial.deviceId, initial.tenantId, async (lease) => {
     const trip = await prisma.drivingTrip.findUniqueOrThrow({ where: { id } });
-    if (usesPlayer(trip.imageId) && trip.status === "RUNNING") {
+    if (usesPlayer(trip.imageId) && (trip.status === "RUNNING" || trip.status === "ARRIVING")) {
       await stepPlayerTrip(trip, lease); return;
     }
     if (trip.status === "ARRIVING") {
@@ -260,6 +261,14 @@ async function runStep(id: string): Promise<void> {
         nextTickAt: new Date(Date.now() + minimumTripIntervalMs), status: point.finished ? "ARRIVING" : "RUNNING", pauseReason: null, error: null,
       } });
       if (accepted.count !== 1) throw new HttpError(409, "Trip state changed after GPS acceptance; the request evidence was preserved");
+      await feedIdentifiedTripGps({
+        trip, fix: {
+          lat: point.lat, lng: point.lng, accuracyM: 8, speedMps: point.speedMps,
+          elapsedMs: Math.round(elapsedMs), nowElapsedMs: Math.round(elapsedMs),
+          sequence: Math.max(0, Math.round(elapsedMs / 1000)),
+          wallMs: Date.now(), bootId: `unanchored:${trip.imageId}`, instanceId: trip.revision,
+        },
+      });
       logger.info({ tripId: id, imageId: trip.imageId, requestId: record.id,
         modeledElapsedMs: elapsedMs, modeledAdvanceMs: elapsedMs - trip.elapsedMs,
         progressM: point.distanceM, advanceM: point.distanceM - trip.progressM,
@@ -276,7 +285,10 @@ async function runStep(id: string): Promise<void> {
       if (clock?.revision === trip.revision) clock.checkedAt = performance.now();
       release();
     }
-    if (arrived && !phoneSyncState(trip).enabled) await finishArrival(await prisma.drivingTrip.findUniqueOrThrow({ where: { id } }), lease);
+    if (arrived && !phoneSyncState(trip).enabled) {
+      const arrival = tripArrivalSnapshot(id);
+      if (!arrival || arrival.canReleasePhone) await finishArrival(await prisma.drivingTrip.findUniqueOrThrow({ where: { id } }), lease);
+    }
   }, { waitMs: 0 });
 }
 
@@ -301,6 +313,7 @@ export async function recoverTrips(): Promise<void> {
       } });
       if (paused.count) await tx.device.updateMany({ where: { id: trip.deviceId, tenantId: trip.tenantId, activeTripId: trip.id }, data: { active: false } });
     });
+    await expireTripRadio(trip.id, "Controller restarted; previous radio session did not survive");
   }, { waitMs: 65_000 });
 }
 

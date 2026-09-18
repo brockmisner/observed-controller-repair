@@ -28,5 +28,6 @@ const migrationArgs = provider === 'postgresql'
   ? ['migrate', 'deploy', '--schema', 'prisma/postgresql/schema.prisma']
   : ['db', 'push', '--skip-generate', '--schema', 'prisma/schema.prisma'];
 const migrationCode = await run('./node_modules/.bin/prisma', migrationArgs);
-if (!migrationCode && !process.env.DUOMOVE_IMAGE_ID) void adbPreflight();
+// Configured player images manage their own per-image ADB connections.
+if (!migrationCode && !process.env.DUOMOVE_IMAGE_ID && !process.env.DUOMOVE_PLAYER_TARGETS) void adbPreflight();
 process.exitCode = migrationCode || await run(process.execPath, ['dist/index.js']);

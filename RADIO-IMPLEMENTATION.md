@@ -27,8 +27,13 @@ correctly observe overlapping real network identities.
   milliseconds, explicitly NOT Android boot-time scan timestamps.
 - Bluetooth action is HOLD/null during movement, REPLACE after arrival. A null result
   means leave current state alone; it must not clear the phone's existing Bluetooth state.
-- Session ownership rejects a second owner of the same physical image. Runtime state
-  is in memory; expired/restarted sessions require explicit re-creation. No silent replay.
+- Session ownership rejects a second owner of the same physical image. Radio writes and
+  player lifecycle work run under the Redis physical-image lease with a fencing epoch, so
+  an expired worker cannot overwrite a newer owner's work. Simulation runtime state is
+  still in memory; expired/restarted sessions require explicit re-creation. No silent replay.
+- Authenticated per-phone delivery adapter with bounded payloads, timeouts, identity checks
+  and explicit applied/received/rejected/uncertain results, behind a replaceable wire codec.
+  Its receiver is a stub: no radio APK exists. See `PHONE-TARGETING.md`.
 - Arrival gate requires fresh, continuous stationary location fixes. Its readback
   contract rejects wrong phone/session/boot/hash, stale readings, unavailable radios,
   and differing network identities/measurements. It consumes authenticated adapter
@@ -36,6 +41,20 @@ correctly observe overlapping real network identities.
 - Tenant-scoped POST `/api/warmup/cities/:id/radio-preview` accepts `{deviceId, position?}`
   and returns an explicitly synthetic preview, with applied=false and androidVerified=false.
   It does not reserve a runtime session, move a marker, write a phone, or run a plugin.
+- Live GPS progress now opens one radio runtime per owning trip and feeds identified
+  samples into that engine, so cache and serving-cell continuity belong to the phone's
+  drive instead of a time-zero preview. Scheduling is selectable (`DUOMOVE_RADIO_SCHEDULE_MODE`,
+  default `LOCAL_SCHEDULE`): moving frames are prepared on the GPS tick; arrival and
+  cleanup travel the delivered path under the 3.5 s budget. Durable `RadioEvidence`
+  records carry tenant, image, trip, session, boot, dataset and sequence identity.
+  Stub-receiver results are stored as `STUB_NOT_APPLICATION` and can never be marked applied.
+- Arrival lifecycle (`src/radio/lifecycle.ts`) feeds `ArrivalGate` from identified GPS
+  fixes. Bluetooth REPLACE is intended only after the gate is ready. Cellular is HOLD /
+  `UNSUPPORTED_IN_SCOPE` for this service area so arrival can complete on Wi-Fi plus
+  Bluetooth. Readback uses `compareReadback`: in-scope MATCH/MISMATCH, out-of-scope
+  `OUT_OF_SCOPE_CONFIRMED` / `SCOPE_LEAK` (never MISMATCH), Wi-Fi throttle INCONCLUSIVE
+  rather than a phone mismatch. Cleanup waits for that sequence; destination is held
+  as durable location by default (`DUOMOVE_DESTINATION_POLICY`).
 
 ## Frozen interface contract
 
@@ -51,21 +70,23 @@ what the messages mean so both sides can be built and validated separately.
 
 ## Not built / not verified
 
-This is not a completed Android radio integration. The live marker is not yet
-wired to radio sessions. The map can show fresh Android GPS readback separately
-from controller coordinates; see `PLAYER-VERIFICATION.md`. Existing movement/RPA
-production behavior is unchanged.
+This is not a completed Android radio integration. The live marker now feeds
+the corresponding radio session. Arrival Bluetooth is intended only after the
+arrival gate confirms a dwell, recorded against a stub receiver until the plugin
+exists. Independent Android readback still requires the rebuilt artifacts.
+The map can show fresh Android GPS readback separately from controller
+coordinates; see `PLAYER-VERIFICATION.md`. Existing movement/RPA production
+behavior is unchanged.
 No new plugin APK, Android radio receiver, or independent radio observer has been built.
 The existing checker-only module remains unchanged.
 
 Remaining integration work depends on the rebuilt plugin's actual supported interface:
 
 1. The Android module/receiver and a declared scope for each supported radio API.
-2. Authenticated per-device delivery and acknowledgments bound to image, session,
-   boot and sequence; explicit restart, pause/resume and reconnect behavior.
-3. Live movement acknowledgments feeding the corresponding radio session, with
-   Bluetooth updates gated by confirmed arrival.
-4. Independent Android API readback and a two-phone test covering distinct locations,
+2. The delivered request/response schema, adopted through the controller's wire codec
+   seam. Controller-side delivery, identity binding and result meanings are implemented
+   against a stub receiver; explicit pause/resume and reconnect behavior is not.
+3. Independent Android API readback and a two-phone test covering distinct locations,
    movement, arrival, disconnect, pause/resume and controller/phone restart.
 
 These pieces are not implemented by the APK verification endpoint. DuoPlus documentation describes

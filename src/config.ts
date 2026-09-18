@@ -73,6 +73,8 @@ export const config = {
   encryptionKey: process.env.ENCRYPTION_KEY?.trim() || "",
   signupsOpen: bool("SIGNUPS_OPEN", true),
   authRequired: bool("AUTH_REQUIRED", true),
+  /** C04. HOLD_DESTINATION (recommended) | RETURN_TO_ANCHOR | RESTORE_PROVIDERS. */
+  destinationPolicy: process.env.DUOMOVE_DESTINATION_POLICY?.trim() || "HOLD_DESTINATION",
 };
 
 if (config.production) {

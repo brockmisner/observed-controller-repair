@@ -2,6 +2,7 @@ import { assertNoWarmup } from "../warmup/service.js";
 import { assertNoPendingRpa } from "../queue/rpaOwnership.js";
 import { usesPlayer } from "./playerConnection.js";
 import { preparePlayerStart, stopPlayerTrip } from "./playerRunner.js";
+import { cancelTripRadio, pauseTripRadio } from "../radio/tripFeed.js";
 import { randomUUID } from "node:crypto";
 import type { Device, DrivingTrip, Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -281,6 +282,7 @@ export async function startTrip(tenantId: string, id: string, revision: string) 
 export async function pauseTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["RUNNING", "ARRIVING", "PAUSED"]);
+    await pauseTripRadio(row.id, "Paused by user.");
     if (usesPlayer(row.imageId)) await stopPlayerTrip(row);
     if (device.activeTripId !== row.id) throw new HttpError(409, "The device no longer owns this trip.");
     await lease.assertOwned();
@@ -324,6 +326,7 @@ export async function resumeTrip(tenantId: string, id: string, revision: string)
 export async function cancelTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["PREVIEW", "RUNNING", "ARRIVING", "PAUSED", "FAILED"]);
+    await cancelTripRadio(row.id, "Cancelled by user.");
     if (usesPlayer(row.imageId)) await stopPlayerTrip(row);
     await lease.assertOwned();
     await prisma.$transaction(async (tx) => {
