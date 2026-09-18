@@ -6,7 +6,7 @@ import { HttpError } from "../http/errors.js";
 import { recordKey, type Position, type RadioRecord } from "../radio/schema.js";
 import { auditDataset, dateSpan, KINDS, mergeAudits, parseDataset, type DatasetAudit, type Kind } from "./inventory.js";
 import { observationSchema, type Observation } from "./observation.js";
-import { DEFAULT_TILE_ZOOM, MAX_TILE_ZOOM, MIN_TILE_ZOOM, tileBounds, tileFor } from "./tiles.js";
+import { DEFAULT_TILE_ZOOM, MAX_TILE_ZOOM, MIN_TILE_ZOOM, tileBounds, tileFor, zoomForKind } from "./tiles.js";
 import { usability } from "./usability.js";
 import type { TileReader } from "./window.js";
 
@@ -143,7 +143,7 @@ export async function appendRecords(prisma: PrismaClient, revisionId: string, re
       summary.outside++;
       continue;
     }
-    const tile = tileFor({ lat: record.lat, lng: record.lng }, revision.tileZoom);
+    const tile = tileFor({ lat: record.lat, lng: record.lng }, zoomForKind(record.kind, revision.tileZoom));
     const id = `${record.kind}|${tile.key}`;
     const bucket = buckets.get(id) ?? { kind: record.kind, tileKey: tile.key, tileX: tile.x, tileY: tile.y, records: [] };
     bucket.records.push(record);
@@ -172,7 +172,7 @@ export async function appendRecords(prisma: PrismaClient, revisionId: string, re
     }
     const rows = [...merged.values()];
     const recordsJson = JSON.stringify(rows);
-    const bounds = tileBounds(revision.tileZoom, bucket.tileX, bucket.tileY);
+    const bounds = tileBounds(zoomForKind(bucket.kind, revision.tileZoom), bucket.tileX, bucket.tileY);
     const span = dateSpan(rows, now.getTime());
     const plmn: Record<string, number> = {};
     for (const record of rows) {

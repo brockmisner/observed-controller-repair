@@ -3,7 +3,7 @@ import { haversineMeters } from "../geo/haversine.js";
 import { positionSchema, recordKey, type Position, type RadioRecord } from "../radio/schema.js";
 import { TileCache, tileCache as sharedTileCache } from "./datasetCache.js";
 import { KINDS, type Kind } from "./inventory.js";
-import { tilesWithin, type TileRef } from "./tiles.js";
+import { tilesWithin, zoomForKind, type TileRef } from "./tiles.js";
 import { DEFAULT_RADII_M, ENGINE_OBSERVATION_LIMIT, usability } from "./usability.js";
 
 /** Fastest supported driving speed in the movement model; used to convert a load margin into time. */
@@ -139,7 +139,7 @@ export async function loadWindow(options: {
 
   for (const kind of KINDS) {
     const radius = radiusFor(kind, outerRadii);
-    const refs: TileRef[] = tilesWithin(request.position, radius, options.tileZoom);
+    const refs: TileRef[] = tilesWithin(request.position, radius, zoomForKind(kind, options.tileZoom));
     requested += refs.length;
     const missing: string[] = [];
     const found = new Map<string, readonly RadioRecord[]>();
