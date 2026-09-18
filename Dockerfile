@@ -18,6 +18,7 @@ COPY src ./src
 COPY public ./public
 COPY scripts ./scripts/
 COPY tests ./tests
+COPY contracts ./contracts
 RUN npm test && if [ "$DATABASE_PROVIDER" = "sqlite" ]; then npm run test:warmup; fi && npm run build
 ENV NODE_ENV=production
 EXPOSE 8787
