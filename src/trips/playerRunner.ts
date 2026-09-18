@@ -8,6 +8,7 @@ import { withPlayer, usesPlayer, observePlayerPhone } from './playerConnection.j
 import { terminal, type PlayerStatus } from './playerProtocol.js';
 import { PlayerPlanCache } from './playerPlan.js';
 import type { TripLease } from './lease.js';
+import { authorizeImageWriter, prismaImageOwnershipStore } from './imageOwnership.js';
 import { ensureTripMaps } from './phoneSync.js';
 const planCache = new PlayerPlanCache();
 interface PlayerState {
@@ -33,7 +34,7 @@ export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
   try {
     const p = playerState(trip);
     if (!p) return;
-    const status = await withPlayer(async c => {
+    const status = await withPlayer(trip.imageId, async c => {
       const current = await c.request({ op: 'status' });
       // A fresh instance with successful recovery has no active providers or session.
       if (current.state === 'IDLE' && current.session_id === '' && current.cleanup_ok) return current;
@@ -49,11 +50,9 @@ export async function preparePlayerStart(trip: DrivingTrip): Promise<void> {
   if (!usesPlayer(trip.imageId)) return;
   if (config.dryRun) throw new HttpError(409, 'Player driving is disabled in dry-run mode');
   if (JSON.parse(trip.arrivalWifiJson).enabled) throw new HttpError(409, 'Disable arrival Wi-Fi for device-side playback.');
-  // Physical-image scope prevents two workspace rows from driving the same phone.
-  if (await prisma.device.count({ where: { imageId: trip.imageId, id: { not: trip.deviceId }, activeTripId: { not: null } } })) {
-    throw new HttpError(409, 'Another workspace trip owns this physical phone. Cancel it first.');
-  }
-  const status = await withPlayer(c => c.request({ op: 'status' })).catch(() => { throw new HttpError(409, 'DuoMove Player is unreachable. Open the app on the phone and check ADB.'); });
+  // Physical-image scope prevents two workspace rows or a campaign reservation from driving the same phone.
+  await authorizeImageWriter(trip.tenantId, trip.imageId, prismaImageOwnershipStore);
+  const status = await withPlayer(trip.imageId, c => c.request({ op: 'status' })).catch(() => { throw new HttpError(409, 'DuoMove Player is unreachable. Open the app on the phone and check ADB.'); });
   if (!status.cleanup_ok || !(status.state === 'IDLE' || terminal(status))) throw new HttpError(409, 'DuoMove Player already has a session or needs provider cleanup.');
 }
 async function recordProgress(trip: DrivingTrip, p: PlayerState) {
@@ -94,7 +93,7 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
     }
     const player = p;
     const { bytes, sha256 } = planCache.get(trip, player);
-    const status = await withPlayer(async c => {
+    const status = await withPlayer(trip.imageId, async c => {
       let s = await c.request({ op: 'status' });
       if (player.instanceId && s.instance_id !== player.instanceId) throw new Error('Player restarted');
       if (!player.instanceId) { player.instanceId = s.instance_id; await store(trip, player); }
@@ -126,7 +125,7 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
     });
     player.status = status; player.checkedAt = new Date().toISOString();
     if (status.applied_seq >= 2 && status.applied_seq - (player.observedSeq ?? -100) >= 10) {
-      try { player.phoneObservation = await observePlayerPhone(); player.observedSeq = status.applied_seq; } catch { /* Player acknowledgments remain distinct from readback. */ }
+      try { player.phoneObservation = await observePlayerPhone(trip.imageId); player.observedSeq = status.applied_seq; } catch { /* Player acknowledgments remain distinct from readback. */ }
     }
     await recordProgress(trip, player);
     if (status.state === 'COMPLETED' && status.cleanup_ok) {
