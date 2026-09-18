@@ -51,6 +51,10 @@ import { listLegacyRpaJobs, resolveLegacyRpaJob } from "../queue/rpaLifecycle.js
 import { inspectPlayerPhone, usesPlayer } from "../trips/playerConnection.js";
 import { verifyPlayer } from "../ops/playerVerification.js";
 import { recordVerification, readVerificationRecord, VerificationJobs, VERIFICATION_EVENT } from "../ops/verificationHistory.js";
+import { liveStatusFromRuntime } from "../radio/liveStatus.js";
+import { tripRadios } from "../radio/runtime.js";
+import { tripArrivalSnapshot } from "../radio/tripFeed.js";
+import { playerLifecycle } from "../trips/playerReadiness.js";
 
 const latitude = z.number().finite().min(-90).max(90);
 const longitude = z.number().finite().min(-180).max(180);
@@ -143,14 +147,47 @@ async function snapshot(tenantId?: string) {
     prisma.device.count({ where: { ...deviceWhere, active: true } }),
     prisma.device.count({ where: { ...deviceWhere, poweredOn: true, duoPlusStatus: 1 } }),
   ]);
-  const devices = await Promise.all(deviceRows.map(async ({ environment, locationRequests, drivingTrips, events: verificationEvents, ...device }) => ({
-    ...device,
-    playerVerificationSupported: Boolean(device.imageId),
-    playerVerification: readVerificationRecord(verificationEvents[0]?.detail, device),
-    environment: environmentView(environment, device),
-    locationTelemetry: locationRequests[0] ? serializeLocationRequest(locationRequests[0]) : null,
-    trip: drivingTrips[0] ? await getTrip(device.tenantId, drivingTrips[0].id) : null,
-  })));
+  const campaignRows = await prisma.warmupCampaign.findMany({
+    where: tenantId ? { tenantId } : {},
+    orderBy: { createdAt: "desc" },
+    select: { deviceId: true, city: { select: { id: true, revision: true, recordsJson: true } } },
+  });
+  const datasets = new Map<string, { revision: string | null; recordsPresent: boolean }>();
+  for (const row of campaignRows) {
+    if (datasets.has(row.deviceId)) continue;
+    const json = row.city.recordsJson;
+    datasets.set(row.deviceId, {
+      revision: `${row.city.id}:${row.city.revision}`,
+      recordsPresent: typeof json === "string" && json !== "[]" && json.length > 2,
+    });
+  }
+  const devices = await Promise.all(deviceRows.map(async ({ environment, locationRequests, drivingTrips, events: verificationEvents, ...device }) => {
+    const trip = drivingTrips[0] ? await getTrip(device.tenantId, drivingTrips[0].id) : null;
+    const arrival = trip ? tripArrivalSnapshot(trip.id) : undefined;
+    return {
+      ...device,
+      playerVerificationSupported: Boolean(device.imageId),
+      playerVerification: readVerificationRecord(verificationEvents[0]?.detail, device),
+      environment: environmentView(environment, device),
+      locationTelemetry: locationRequests[0] ? serializeLocationRequest(locationRequests[0]) : null,
+      trip,
+      radioLive: liveStatusFromRuntime({
+        imageId: device.imageId,
+        deviceId: device.id,
+        mcc: device.mcc,
+        mnc: device.mnc,
+        nowMs: Date.now(),
+        trip: trip ? { id: trip.id, status: trip.status } : null,
+        dataset: datasets.get(device.id) ?? { revision: null, recordsPresent: false },
+        playerReadiness: playerLifecycle.lastReadiness(device.imageId) ?? null,
+        verification: readVerificationRecord(verificationEvents[0]?.detail, device),
+        arrival: arrival ?? null,
+        comparison: arrival?.comparison ?? null,
+        runtime: trip ? tripRadios.get(trip.id) ?? null : null,
+        radioPluginPresent: false,
+      }),
+    };
+  }));
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const events = (await eventsSince(devices.map((d) => d.id), since)).filter(event => {
     if (event.kind !== VERIFICATION_EVENT) return true;
