@@ -1,5 +1,4 @@
 import { handleWarmupRequest } from "./warmup.js";
-import { handleCoverageRequest } from "./coverage.js";
 import { assertNoWarmup } from "../warmup/service.js";
 import { savedFolders } from "../orchestrator/folders.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -235,7 +234,6 @@ async function snapshot(tenantId?: string) {
   };
 }
 
-/** Routes one HTTP request and translates expected failures into JSON error responses. */
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -316,7 +314,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     const auth = await readAuth(req);
     if (await handleWarmupRequest(req, res, url, auth?.tenantId)) return;
-    if (await handleCoverageRequest(req, res, url, auth?.tenantId)) return;
     if (await handleSiteRequest(req, res, url, auth?.tenantId)) return;
     if (await handleTripRequest(req, res, url, auth?.tenantId)) return;
     if (config.authRequired && !auth && path !== "/health") {
