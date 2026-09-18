@@ -18,6 +18,9 @@ COPY src ./src
 COPY public ./public
 COPY scripts ./scripts/
 COPY tests ./tests
+# tests/radio-contract.test.ts reads these fixtures from disk, so the build-time test step needs
+# them present. Without this the file throws while loading and its cases never run.
+COPY contracts ./contracts
 RUN npm test && if [ "$DATABASE_PROVIDER" = "sqlite" ]; then npm run test:warmup; fi && npm run build
 ENV NODE_ENV=production
 EXPOSE 8787
