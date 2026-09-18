@@ -12,6 +12,7 @@ import { reserveMovement, withEnvironmentWindow } from "../orchestrator/deviceOp
 import { dispatchGps, gpsEligibility, gpsIsDue } from "../orchestrator/locationDispatch.js";
 import { checkDevicePower, recordPowerObservation } from "../orchestrator/powerCheck.js";
 import { withTripLease, type TripLease } from "./lease.js";
+import { feedTripRadio } from "../radio/tripFeed.js";
 import { readRetryableCheckpoint } from "./retryCheckpoint.js";
 import { createRouteTimeline } from "./routeTimeline.js";
 import { validateDrivingRoute } from "./routes.js";
@@ -260,6 +261,16 @@ async function runStep(id: string): Promise<void> {
         nextTickAt: new Date(Date.now() + minimumTripIntervalMs), status: point.finished ? "ARRIVING" : "RUNNING", pauseReason: null, error: null,
       } });
       if (accepted.count !== 1) throw new HttpError(409, "Trip state changed after GPS acceptance; the request evidence was preserved");
+      await feedTripRadio({
+        trip, bootId: `unanchored:${trip.imageId}`, instanceId: trip.revision,
+        progress: {
+          position: { lat: point.lat, lng: point.lng },
+          elapsedMs: Math.round(elapsedMs),
+          sequence: Math.max(0, Math.round(elapsedMs / 1000)),
+          phase: point.finished ? 'ARRIVED' : 'MOVING',
+          wallMs: Date.now(),
+        },
+      });
       logger.info({ tripId: id, imageId: trip.imageId, requestId: record.id,
         modeledElapsedMs: elapsedMs, modeledAdvanceMs: elapsedMs - trip.elapsedMs,
         progressM: point.distanceM, advanceM: point.distanceM - trip.progressM,

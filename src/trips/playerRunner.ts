@@ -11,6 +11,7 @@ import type { TripLease } from './lease.js';
 import { authorizeImageWriter, prismaImageOwnershipStore } from './imageOwnership.js';
 import { playerLifecycle, type PhonePowerState } from './playerReadiness.js';
 import { ensureTripMaps } from './phoneSync.js';
+import { closeTripRadio, feedTripRadio } from '../radio/tripFeed.js';
 const planCache = new PlayerPlanCache();
 interface PlayerState {
   sessionId: string; offsetMs: number; instanceId?: string; started?: boolean;
@@ -51,7 +52,7 @@ export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
     if (status.session_id === p.sessionId) await recordProgress(trip, { ...p, status, checkedAt: new Date().toISOString() });
     else await store(trip, { ...p, status, checkedAt: new Date().toISOString() });
     playerLifecycle.release(trip.imageId, p.sessionId);
-  } finally { planCache.delete(trip.id); }
+  } finally { planCache.delete(trip.id); closeTripRadio(trip.id); }
 }
 /** Cached provider power state. The trip start path still confirms power with the provider. */
 async function lastKnownPower(deviceId: string): Promise<PhonePowerState> {
@@ -91,7 +92,34 @@ async function recordProgress(trip: DrivingTrip, p: PlayerState) {
     } });
   });
   trip.phoneSyncJson = JSON.stringify(sync);
-  if (sample) { trip.elapsedMs = Math.round(sample.model_ms); trip.progressM = sample.distance_m; }
+  if (sample) {
+    trip.elapsedMs = Math.round(sample.model_ms); trip.progressM = sample.distance_m;
+    const instanceId = p.instanceId ?? p.sessionId;
+    const completed = terminal(status) && status.state === 'COMPLETED';
+    const phase = sample.phase === 'dwell' || completed ? 'ARRIVED' : 'MOVING';
+    await feedTripRadio({
+      trip, bootId: `unanchored:${instanceId}`, instanceId,
+      progress: {
+        position: { lat: sample.lat, lng: sample.lon },
+        elapsedMs: Math.round(sample.model_ms),
+        sequence: status.applied_seq,
+        phase,
+        wallMs: Date.now(),
+      },
+    });
+    if (completed) {
+      await feedTripRadio({
+        trip, bootId: `unanchored:${instanceId}`, instanceId,
+        progress: {
+          position: { lat: sample.lat, lng: sample.lon },
+          elapsedMs: Math.round(sample.model_ms) + 1000,
+          sequence: status.applied_seq + 1,
+          phase: 'CLEANUP',
+          wallMs: Date.now(),
+        },
+      });
+    }
+  }
 }
 export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promise<void> {
   const requireOwner = async () => {

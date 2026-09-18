@@ -73,6 +73,8 @@ export const config = {
   encryptionKey: process.env.ENCRYPTION_KEY?.trim() || "",
   signupsOpen: bool("SIGNUPS_OPEN", true),
   authRequired: bool("AUTH_REQUIRED", true),
+  /** B06. LOCAL_SCHEDULE (recommended) or DELIVERED. Not signed off; selectable rather than hard-wired. */
+  radioScheduleMode: process.env.DUOMOVE_RADIO_SCHEDULE_MODE?.trim() || "LOCAL_SCHEDULE",
 };
 
 if (config.production) {

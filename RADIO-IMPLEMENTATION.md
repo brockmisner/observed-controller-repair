@@ -41,6 +41,13 @@ correctly observe overlapping real network identities.
 - Tenant-scoped POST `/api/warmup/cities/:id/radio-preview` accepts `{deviceId, position?}`
   and returns an explicitly synthetic preview, with applied=false and androidVerified=false.
   It does not reserve a runtime session, move a marker, write a phone, or run a plugin.
+- Live GPS progress now opens one radio runtime per owning trip and feeds identified
+  samples into that engine, so cache and serving-cell continuity belong to the phone's
+  drive instead of a time-zero preview. Scheduling is selectable (`DUOMOVE_RADIO_SCHEDULE_MODE`,
+  default `LOCAL_SCHEDULE`): moving frames are prepared on the GPS tick; arrival and
+  cleanup travel the delivered path under the 3.5 s budget. Durable `RadioEvidence`
+  records carry tenant, image, trip, session, boot, dataset and sequence identity.
+  Stub-receiver results are stored as `STUB_NOT_APPLICATION` and can never be marked applied.
 
 ## Frozen interface contract
 
@@ -56,10 +63,12 @@ what the messages mean so both sides can be built and validated separately.
 
 ## Not built / not verified
 
-This is not a completed Android radio integration. The live marker is not yet
-wired to radio sessions. The map can show fresh Android GPS readback separately
-from controller coordinates; see `PLAYER-VERIFICATION.md`. Existing movement/RPA
-production behavior is unchanged.
+This is not a completed Android radio integration. The live marker now feeds
+the corresponding radio session. Arrival Bluetooth application and independent
+Android readback still require the rebuilt plugin.
+The map can show fresh Android GPS readback separately from controller
+coordinates; see `PLAYER-VERIFICATION.md`. Existing movement/RPA production
+behavior is unchanged.
 No new plugin APK, Android radio receiver, or independent radio observer has been built.
 The existing checker-only module remains unchanged.
 
@@ -69,9 +78,7 @@ Remaining integration work depends on the rebuilt plugin's actual supported inte
 2. The delivered request/response schema, adopted through the controller's wire codec
    seam. Controller-side delivery, identity binding and result meanings are implemented
    against a stub receiver; explicit pause/resume and reconnect behavior is not.
-3. Live movement acknowledgments feeding the corresponding radio session, with
-   Bluetooth updates gated by confirmed arrival.
-4. Independent Android API readback and a two-phone test covering distinct locations,
+3. Independent Android API readback and a two-phone test covering distinct locations,
    movement, arrival, disconnect, pause/resume and controller/phone restart.
 
 These pieces are not implemented by the APK verification endpoint. DuoPlus documentation describes
