@@ -103,6 +103,7 @@ export function planQueryCells(center: Position, radiusM: number, cellSizeM: num
   return cells;
 }
 
+/** Validates an area request and estimates its bounded query grid, page count, and budget duration. */
 export function planAreaIngest(raw: unknown): IngestPlan {
   const request = planRequestSchema.parse(raw);
   const cells = planQueryCells(request.center, request.radiusM, request.cellSizeM);

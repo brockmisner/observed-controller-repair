@@ -18,6 +18,7 @@ const MAX_MERCATOR_LAT = 85.05112878;
  */
 export const CELL_ZOOM_OFFSET = 3;
 
+/** Uses the configured zoom for dense observations and a coarser zoom for cellular observations. */
 export function zoomForKind(kind: "WIFI" | "CELL" | "BLUETOOTH", baseZoom: number): number {
   return kind === "CELL" ? Math.max(MIN_TILE_ZOOM, baseZoom - CELL_ZOOM_OFFSET) : baseZoom;
 }
@@ -25,6 +26,7 @@ export function zoomForKind(kind: "WIFI" | "CELL" | "BLUETOOTH", baseZoom: numbe
 export type TileRef = { zoom: number; x: number; y: number; key: string };
 export type TileBounds = { minLat: number; maxLat: number; minLng: number; maxLng: number };
 
+/** Formats a stable Web-Mercator tile identifier. */
 export function tileKey(zoom: number, x: number, y: number): string {
   return `${zoom}/${x}/${y}`;
 }
@@ -37,6 +39,7 @@ function clampLat(lat: number): number {
   return Math.min(MAX_MERCATOR_LAT, Math.max(-MAX_MERCATOR_LAT, lat));
 }
 
+/** Locates a position in the supported Web-Mercator grid, clamping coordinates to grid bounds. */
 export function tileFor(position: Position, zoom: number): TileRef {
   assertZoom(zoom);
   const count = 2 ** zoom;
@@ -48,6 +51,7 @@ export function tileFor(position: Position, zoom: number): TileRef {
   return { zoom, x, y, key: tileKey(zoom, x, y) };
 }
 
+/** Converts a supported tile coordinate to its geographic bounds. */
 export function tileBounds(zoom: number, x: number, y: number): TileBounds {
   assertZoom(zoom);
   const count = 2 ** zoom;
@@ -99,6 +103,7 @@ export function tileIntersectsCircle(ref: TileRef, center: Position, radiusM: nu
   return lngCandidates.some((lng) => haversineMeters(center.lat, center.lng, lat, lng) <= radiusM);
 }
 
+/** Approximates a tile's surface area in square kilometers at the tile row's latitude. */
 export function tileAreaKm2(zoom: number, y: number): number {
   const bounds = tileBounds(zoom, 0, y);
   const height = haversineMeters(bounds.minLat, 0, bounds.maxLat, 0);

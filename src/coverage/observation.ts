@@ -43,6 +43,7 @@ function ageDays(value: string | null | undefined, now: number): number | null {
   return Number.isFinite(at) ? Math.round((now - at) / 86_400_000) : null;
 }
 
+/** Applies the source-quality and observation-age policy to one saved radio record. */
 export function observationConfidence(record: RadioRecord, now = Date.now()): Confidence {
   const observationAgeDays = ageDays(record.lastSeen, now);
   const catalogueAgeDays = ageDays(record.lastUpdated, now);
@@ -67,6 +68,7 @@ export function observationConfidence(record: RadioRecord, now = Date.now()): Co
 
 export type ConfidenceBreakdown = Record<ConfidenceTier, number>;
 
+/** Counts saved records by their confidence tier at the supplied time. */
 export function confidenceBreakdown(records: readonly RadioRecord[], now = Date.now()): ConfidenceBreakdown {
   const breakdown: ConfidenceBreakdown = { STRONG: 0, FAIR: 0, WEAK: 0, UNKNOWN: 0 };
   for (const record of records) breakdown[observationConfidence(record, now).tier]++;

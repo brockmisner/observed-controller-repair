@@ -69,6 +69,7 @@ function positions(name: string): Array<{ lat: number; lng: number }> | undefine
   });
 }
 
+/** Resolves an explicit workspace or falls back to the oldest workspace in the database. */
 async function tenant(): Promise<string> {
   const explicit = flag("tenantId");
   if (explicit) return explicit;
@@ -77,12 +78,14 @@ async function tenant(): Promise<string> {
   return first.id;
 }
 
+/** Reads and validates the optional cell-propagation scenario file. */
 async function scenario(): Promise<CellScenario | null> {
   const path = flag("cellScenario");
   if (!path) return null;
   return cellScenarioSchema.parse(JSON.parse(await readFile(path, "utf8")));
 }
 
+/** Reads JSON inputs from either the selected directory or a comma-separated file list. */
 async function inputFiles(): Promise<Array<{ filename: string; contents: string }>> {
   const directory = flag("dir");
   const list = flag("files");
@@ -117,6 +120,7 @@ function wigleFetcher(tenantId: string) {
   };
 }
 
+/** Generates deterministic synthetic Wi-Fi observations for repeatable storage benchmarks. */
 function generatedRecords(count: number, center: { lat: number; lng: number }, radiusM: number, now: number) {
   const records = [];
   for (let index = 0; index < count; index++) {
@@ -143,6 +147,7 @@ function generatedRecords(count: number, center: { lat: number; lng: number }, r
   return records;
 }
 
+/** Runs the selected command and returns its process exit code. */
 async function main(): Promise<number> {
   switch (command) {
     case "plan": {

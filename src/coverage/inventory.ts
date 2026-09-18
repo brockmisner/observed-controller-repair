@@ -57,7 +57,7 @@ function count(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }
 
-/** Parses saved dataset JSON one row at a time so a single unusable row is visible instead of failing the report. */
+/** Parses saved dataset rows one at a time so a single unusable row is visible instead of failing the report. */
 export function parseDataset(value: unknown): ParsedDataset {
   const rows = Array.isArray(value) ? value : [];
   const records: RadioRecord[] = [];
@@ -81,6 +81,7 @@ export function parseDataset(value: unknown): ParsedDataset {
   return { records, invalid, invalidReasons, duplicateIdentities };
 }
 
+/** Summarizes observation dates, falling back to catalog update dates when last-seen dates are absent. */
 export function dateSpan(records: readonly RadioRecord[], now = Date.now()): DateSpan {
   let oldest: number | null = null;
   let newest: number | null = null;

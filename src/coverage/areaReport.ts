@@ -362,6 +362,7 @@ export function explainConfidence(record: Observation, now = Date.now()) {
   return { identifier: record.identifier, kind: record.kind, source: record.source, transid: record.transid ?? null, ...observationConfidence(record, now) };
 }
 
+/** Returns the rounded distance in meters between a position and the service-area center. */
 export function distanceToArea(position: Position, pin: AreaPin): number {
   return Math.round(haversineMeters(pin.area.center.lat, pin.area.center.lng, position.lat, position.lng));
 }

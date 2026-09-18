@@ -75,6 +75,7 @@ export function medianPowerDbm(record: RadioRecord, position: Position, distance
   return modeledPower(record, position, distanceM, frequencyMHz, 0);
 }
 
+/** Returns the radio engine's emission floor for a record's interface and cellular RAT. */
 export function audibleFloorDbm(record: RadioRecord): number {
   if (record.kind === "WIFI") return AUDIBLE_FLOOR_DBM.WIFI;
   if (record.kind === "BLUETOOTH") return AUDIBLE_FLOOR_DBM.BLUETOOTH;

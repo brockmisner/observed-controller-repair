@@ -40,12 +40,14 @@ export class TileCache {
   private misses = 0;
   private evictions = 0;
 
+  /** Creates a tile cache that evicts older entries after the configured record count is exceeded. */
   constructor(private readonly maxRecords = 250_000) {}
 
   private static id(revisionId: string, kind: Kind, tileKey: string): string {
     return `${revisionId}|${kind}|${tileKey}`;
   }
 
+  /** Returns a cached tile, updates its recency, and records a cache hit or miss. */
   get(revisionId: string, kind: Kind, tileKey: string): readonly RadioRecord[] | undefined {
     const id = TileCache.id(revisionId, kind, tileKey);
     const entry = this.entries.get(id);
@@ -59,6 +61,7 @@ export class TileCache {
     return entry.records;
   }
 
+  /** Freezes and caches a tile, evicting older tiles when the total record count exceeds the budget. */
   set(revisionId: string, kind: Kind, tileKey: string, records: RadioRecord[]): readonly RadioRecord[] {
     const frozen = freezeRecords(records);
     const id = TileCache.id(revisionId, kind, tileKey);
@@ -88,10 +91,12 @@ export class TileCache {
     return dropped;
   }
 
+  /** Returns current occupancy and cumulative hit, miss, and eviction counters. */
   stats(): TileCacheStats {
     return { tiles: this.entries.size, records: this.records, maxRecords: this.maxRecords, hits: this.hits, misses: this.misses, evictions: this.evictions };
   }
 
+  /** Removes every tile and resets all cache counters. */
   reset(): void {
     this.entries.clear();
     this.records = 0;

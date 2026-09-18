@@ -82,6 +82,7 @@ function timestamp(value: unknown, now: number): string | null {
   return new Date(at).toISOString();
 }
 
+/** Classifies a WiGLE payload as a search page, aggregate, rate-limit or balance refusal, or error. */
 export function classifyResponse(value: unknown): ClassifiedResponse {
   const empty: ClassifiedResponse = {
     kind: "ERROR", message: "Unrecognized response", rows: [],
@@ -365,6 +366,7 @@ export function normalizeWigleRows(rows: readonly unknown[], options: {
   return result;
 }
 
+/** Mutates a normalization summary by appending records and accumulating every counter. */
 export function mergeNormalizations(target: RowNormalization, addition: RowNormalization): RowNormalization {
   target.records.push(...addition.records);
   for (const [key, count] of Object.entries(addition.rejected)) target.rejected[key] = (target.rejected[key] ?? 0) + count;
