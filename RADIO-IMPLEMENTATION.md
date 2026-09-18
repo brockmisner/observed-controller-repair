@@ -48,6 +48,13 @@ correctly observe overlapping real network identities.
   cleanup travel the delivered path under the 3.5 s budget. Durable `RadioEvidence`
   records carry tenant, image, trip, session, boot, dataset and sequence identity.
   Stub-receiver results are stored as `STUB_NOT_APPLICATION` and can never be marked applied.
+- Arrival lifecycle (`src/radio/lifecycle.ts`) feeds `ArrivalGate` from identified GPS
+  fixes. Bluetooth REPLACE is intended only after the gate is ready. Cellular is HOLD /
+  `UNSUPPORTED_IN_SCOPE` for this service area so arrival can complete on Wi-Fi plus
+  Bluetooth. Readback uses `compareReadback`: in-scope MATCH/MISMATCH, out-of-scope
+  `OUT_OF_SCOPE_CONFIRMED` / `SCOPE_LEAK` (never MISMATCH), Wi-Fi throttle INCONCLUSIVE
+  rather than a phone mismatch. Cleanup waits for that sequence; destination is held
+  as durable location by default (`DUOMOVE_DESTINATION_POLICY`).
 
 ## Frozen interface contract
 
@@ -64,8 +71,9 @@ what the messages mean so both sides can be built and validated separately.
 ## Not built / not verified
 
 This is not a completed Android radio integration. The live marker now feeds
-the corresponding radio session. Arrival Bluetooth application and independent
-Android readback still require the rebuilt plugin.
+the corresponding radio session. Arrival Bluetooth is intended only after the
+arrival gate confirms a dwell, recorded against a stub receiver until the plugin
+exists. Independent Android readback still requires the rebuilt artifacts.
 The map can show fresh Android GPS readback separately from controller
 coordinates; see `PLAYER-VERIFICATION.md`. Existing movement/RPA production
 behavior is unchanged.

@@ -11,7 +11,8 @@ import type { TripLease } from './lease.js';
 import { authorizeImageWriter, prismaImageOwnershipStore } from './imageOwnership.js';
 import { playerLifecycle, type PhonePowerState } from './playerReadiness.js';
 import { ensureTripMaps } from './phoneSync.js';
-import { closeTripRadio, feedTripRadio } from '../radio/tripFeed.js';
+import { closeTripRadio, feedIdentifiedTripGps, pauseTripRadio, tripArrivalSnapshot } from '../radio/tripFeed.js';
+import { destinationPolicy, durableLocationAfterTrip } from '../radio/destinationPolicy.js';
 const planCache = new PlayerPlanCache();
 interface PlayerState {
   sessionId: string; offsetMs: number; instanceId?: string; started?: boolean;
@@ -96,32 +97,78 @@ async function recordProgress(trip: DrivingTrip, p: PlayerState) {
     trip.elapsedMs = Math.round(sample.model_ms); trip.progressM = sample.distance_m;
     const instanceId = p.instanceId ?? p.sessionId;
     const completed = terminal(status) && status.state === 'COMPLETED';
-    const phase = sample.phase === 'dwell' || completed ? 'ARRIVED' : 'MOVING';
-    await feedTripRadio({
-      trip, bootId: `unanchored:${instanceId}`, instanceId,
-      progress: {
-        position: { lat: sample.lat, lng: sample.lon },
-        elapsedMs: Math.round(sample.model_ms),
-        sequence: status.applied_seq,
-        phase,
-        wallMs: Date.now(),
+    await feedIdentifiedTripGps({
+      trip, fix: {
+        lat: sample.lat, lng: sample.lon, accuracyM: sample.accuracy_m, speedMps: sample.speed_mps,
+        elapsedMs: Math.round(sample.model_ms), nowElapsedMs: Math.round(sample.model_ms),
+        sequence: status.applied_seq, wallMs: Date.now(), bootId: `unanchored:${instanceId}`, instanceId,
       },
+      playerGpsCleaned: completed,
     });
-    if (completed) {
-      await feedTripRadio({
-        trip, bootId: `unanchored:${instanceId}`, instanceId,
-        progress: {
-          position: { lat: sample.lat, lng: sample.lon },
-          elapsedMs: Math.round(sample.model_ms) + 1000,
-          sequence: status.applied_seq + 1,
-          phase: 'CLEANUP',
-          wallMs: Date.now(),
-        },
-      });
-    }
   }
 }
+async function finishPlayerArrival(trip: DrivingTrip): Promise<void> {
+  const arrival = tripArrivalSnapshot(trip.id);
+  if (!arrival?.canReleasePhone) {
+    await prisma.drivingTrip.updateMany({
+      where: { id: trip.id, revision: trip.revision, status: { in: ['RUNNING', 'ARRIVING'] } },
+      data: {
+        status: 'ARRIVING', nextTickAt: new Date(Date.now() + 1000),
+        pauseReason: arrival?.detail ?? 'Waiting for radio observation; GPS providers may already be cleaned',
+        error: null,
+      },
+    });
+    await prisma.device.updateMany({
+      where: { id: trip.deviceId, activeTripId: trip.id },
+      data: { lastSpeedMps: 0, phase: 'STATIONARY' },
+    });
+    return;
+  }
+  const device = await prisma.device.findFirst({ where: { id: trip.deviceId } });
+  const destination = JSON.parse(trip.routeJson).destination as { lat: number; lng: number };
+  const held = durableLocationAfterTrip(
+    arrival.destinationPolicy ?? destinationPolicy(),
+    destination,
+    device ? { lat: device.anchorLat, lng: device.anchorLng } : destination,
+  );
+  await prisma.$transaction(async tx => {
+    await tx.drivingTrip.update({ where: { id: trip.id }, data: { status: 'ARRIVED', arrivedAt: new Date(), finishedAt: new Date(), nextTickAt: null, pauseReason: null, error: null } });
+    await tx.device.updateMany({
+      where: { id: trip.deviceId, activeTripId: trip.id },
+      data: {
+        activeTripId: null, active: false, phase: 'STATIONARY', transitMode: null, lastSpeedMps: 0,
+        currentLat: held.lat, currentLng: held.lng,
+      },
+    });
+  });
+  planCache.delete(trip.id);
+  closeTripRadio(trip.id);
+}
+
+async function pollPlayerArrival(trip: DrivingTrip): Promise<void> {
+  const p = playerState(trip);
+  const instanceId = p?.instanceId ?? p?.sessionId ?? trip.revision;
+  const destination = JSON.parse(trip.routeJson).destination as { lat: number; lng: number };
+  await feedIdentifiedTripGps({
+    trip,
+    fix: {
+      lat: trip.acceptedLat ?? destination.lat,
+      lng: trip.acceptedLng ?? destination.lng,
+      accuracyM: 8, speedMps: 0,
+      elapsedMs: Math.round(trip.elapsedMs), nowElapsedMs: Math.round(trip.elapsedMs),
+      sequence: Math.max(0, Math.round(trip.elapsedMs / 1000)),
+      wallMs: Date.now(), bootId: `unanchored:${instanceId}`, instanceId,
+    },
+    playerGpsCleaned: true,
+  });
+  await finishPlayerArrival(trip);
+}
+
 export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promise<void> {
+  if (trip.status === 'ARRIVING') {
+    await pollPlayerArrival(trip);
+    return;
+  }
   const requireOwner = async () => {
     await lease.assertOwned();
     if (!await prisma.drivingTrip.count({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING',
@@ -176,11 +223,7 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
     }
     await recordProgress(trip, player);
     if (status.state === 'COMPLETED' && status.cleanup_ok) {
-      await prisma.$transaction(async tx => {
-        await tx.drivingTrip.update({ where: { id: trip.id }, data: { status: 'ARRIVED', arrivedAt: new Date(), finishedAt: new Date(), nextTickAt: null, pauseReason: null, error: null } });
-        await tx.device.updateMany({ where: { id: trip.deviceId, activeTripId: trip.id }, data: { activeTripId: null, active: false, phase: 'STATIONARY', transitMode: null, lastSpeedMps: 0 } });
-      });
-      planCache.delete(trip.id);
+      await finishPlayerArrival(trip);
     } else if (terminal(status)) throw new Error(`Player stopped: ${status.error || status.state}`);
     else await prisma.drivingTrip.updateMany({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING' }, data: {
       nextTickAt: new Date(Date.now() + 1500), pauseReason: null, error: null,
@@ -192,7 +235,10 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
   } catch (error) {
     // No further heartbeats after failure. Cancel if reachable; retain ownership either way.
     let cleanup = false;
-    try { await stopPlayerTrip(trip); cleanup = true; } catch { /* 15-second device lease remains the fallback. */ }
+    try {
+      await pauseTripRadio(trip.id, 'Player connection lost or failed; radio state is not assumed applied');
+      await stopPlayerTrip(trip); cleanup = true;
+    } catch { /* 15-second device lease remains the fallback. */ }
     const reason = cleanup ? 'Player stopped. Review the phone and Resume explicitly.' : 'Player connection lost. Stop is unconfirmed; ownership retained. Retry Cancel after reconnecting.';
     await prisma.drivingTrip.updateMany({ where: { id: trip.id, revision: trip.revision, status: 'RUNNING' }, data: {
       status: 'PAUSED', nextTickAt: null, lastStepAt: null, pauseReason: reason, error: reason,
