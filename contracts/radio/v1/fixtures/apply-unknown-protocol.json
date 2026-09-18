@@ -1,0 +1,90 @@
+{
+  "protocol": "duoplus.gps",
+  "protocolVersion": 1,
+  "messageType": "radio.apply",
+  "messageId": "11111111-2222-4333-8444-000000000001",
+  "sentAtWallMs": 1789700000000,
+  "identity": {
+    "tenantId": "workspace-brock",
+    "imageId": "N5YK6",
+    "sessionId": "4f5b3d02-9a2f-4b70-8c31-0a4f0a2d51aa",
+    "bootId": "boot-8812-2f4a1c90",
+    "instanceId": "agent-instance-6d1f0b73",
+    "datasetRevision": "miami-beach-7mi:12"
+  },
+  "sequence": 47,
+  "simElapsedMs": 47000,
+  "validForMs": 5000,
+  "scopeFingerprint": "abb263a4b3c83740ae9f8330a5df1a71515a48c1cc39527536d99948aca07e83",
+  "phase": "MOVING",
+  "position": {
+    "lat": 25.79065,
+    "lng": -80.13
+  },
+  "frameHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "wifi": {
+    "directive": "REPLACE",
+    "sampledSimElapsedMs": 30000,
+    "cacheIntervalMs": 30000,
+    "entries": [
+      {
+        "bssid": "a4:2b:8c:00:11:22",
+        "ssid": "OceanDrive-2G",
+        "frequencyMHz": 2412,
+        "rssiDbm": -61
+      },
+      {
+        "bssid": "a4:2b:8c:00:11:23",
+        "ssid": "OceanDrive-5G",
+        "frequencyMHz": 5180,
+        "rssiDbm": -74
+      }
+    ]
+  },
+  "cells": {
+    "directive": "REPLACE",
+    "sampledSimElapsedMs": 47000,
+    "cacheIntervalMs": 1000,
+    "entries": [
+      {
+        "identifier": "CELL:LTE:310:260:4201:184320011",
+        "rat": "LTE",
+        "mcc": "310",
+        "mnc": "260",
+        "areaCode": 4201,
+        "cellId": 184320011,
+        "pci": 271,
+        "frequencyMHz": 1900,
+        "channel": 1975,
+        "rsrpDbm": -88,
+        "rsrqDb": null,
+        "sinrDb": null,
+        "timingAdvance": null,
+        "registered": true
+      },
+      {
+        "identifier": "CELL:LTE:310:260:4201:184320012",
+        "rat": "LTE",
+        "mcc": "310",
+        "mnc": "260",
+        "areaCode": 4201,
+        "cellId": 184320012,
+        "pci": 272,
+        "frequencyMHz": 1900,
+        "channel": 1975,
+        "rsrpDbm": -101,
+        "rsrqDb": null,
+        "sinrDb": null,
+        "timingAdvance": null,
+        "registered": false
+      }
+    ]
+  },
+  "bluetooth": {
+    "directive": "HOLD",
+    "entries": null
+  },
+  "warnings": [
+    "SECTOR_UNKNOWN:CELL:LTE:310:260:4201:184320012"
+  ]
+}

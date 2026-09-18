@@ -1,0 +1,675 @@
+{
+  "protocol": "duoplus.radio",
+  "protocolVersion": 1,
+  "description": "Shared radio-plugin protocol fixtures. Both the controller and the plugin APK must produce the stated outcome for every case.",
+  "outcomes": {
+    "ACCEPT": "The validator must accept the message.",
+    "REJECT": "The validator must refuse the message with the stated code, and with the stated detail when present."
+  },
+  "cases": [
+    {
+      "file": "fixtures/apply-moving-valid.json",
+      "messageType": "radio.apply",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Drive frame: Wi-Fi from a 30 s cached scan, per-tick cells, Bluetooth held."
+    },
+    {
+      "file": "fixtures/apply-arrival-valid.json",
+      "messageType": "radio.apply",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Arrival frame: the only phase permitted to replace Bluetooth."
+    },
+    {
+      "file": "fixtures/apply-empty-replace-valid.json",
+      "messageType": "radio.apply",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "REPLACE with an empty list asserts nothing is present; it is not missing data."
+    },
+    {
+      "file": "fixtures/apply-cleanup-clear-valid.json",
+      "messageType": "radio.apply",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Cleanup explicitly clears the controller-injected state on every interface."
+    },
+    {
+      "file": "fixtures/apply-hold-all-valid.json",
+      "messageType": "radio.apply",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Every interface held: the phone keeps whatever it already has."
+    },
+    {
+      "file": "fixtures/apply-future-protocol-version.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "PROTOCOL_VERSION_UNSUPPORTED",
+      "detail": "PROTOCOL_VERSION",
+      "why": "A newer protocol version is refused outright rather than partially interpreted."
+    },
+    {
+      "file": "fixtures/apply-unknown-protocol.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "PROTOCOL_VERSION_UNSUPPORTED",
+      "detail": "PROTOCOL_NAME",
+      "why": "A different protocol name is refused before any field is read."
+    },
+    {
+      "file": "fixtures/apply-unknown-message-type.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MESSAGE_TYPE_UNSUPPORTED",
+      "detail": null,
+      "why": "An unrecognized message type is never guessed at."
+    },
+    {
+      "file": "fixtures/apply-hold-with-entries.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "HOLD must carry no payload; a hold that ships data is ambiguous."
+    },
+    {
+      "file": "fixtures/apply-replace-null-entries.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "REPLACE must carry a list; null would be indistinguishable from a hold."
+    },
+    {
+      "file": "fixtures/apply-clear-with-entries.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "CLEAR removes state; it cannot also assert content."
+    },
+    {
+      "file": "fixtures/apply-unknown-directive.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Only HOLD, REPLACE and CLEAR exist."
+    },
+    {
+      "file": "fixtures/apply-bluetooth-replaced-in-motion.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "BLUETOOTH_REPLACED_IN_MOTION",
+      "why": "Bluetooth replacement during movement is refused by the contract, not only by the arrival gate."
+    },
+    {
+      "file": "fixtures/apply-cleanup-applies-state.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "CLEANUP_APPLIES_STATE",
+      "why": "A cleanup frame cannot install new state on its way out."
+    },
+    {
+      "file": "fixtures/apply-missing-boot-id.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Boot identity is mandatory; without it a pre-reboot frame could be applied after a restart."
+    },
+    {
+      "file": "fixtures/apply-missing-instance-id.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Agent process identity is separate from boot identity and equally mandatory."
+    },
+    {
+      "file": "fixtures/apply-missing-scope-fingerprint.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Every frame states the injected package scope it was computed for."
+    },
+    {
+      "file": "fixtures/apply-unknown-field.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Unknown fields are refused. Extensions arrive through capability negotiation, not silent tolerance."
+    },
+    {
+      "file": "fixtures/apply-sample-newer-than-frame.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SAMPLE_AHEAD_OF_FRAME",
+      "why": "A cached sample cannot be dated after the frame delivering it."
+    },
+    {
+      "file": "fixtures/apply-negative-sim-clock.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Simulation time is a non-negative integer in the SIM domain."
+    },
+    {
+      "file": "fixtures/apply-validfor-too-long.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "An unbounded validity window would let a stale frame apply late."
+    },
+    {
+      "file": "fixtures/apply-two-registered-cells.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "MULTIPLE_SERVING_CELLS",
+      "why": "A phone has one serving cell."
+    },
+    {
+      "file": "fixtures/apply-lte-rsrp-out-of-range.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "MEASUREMENT_OUT_OF_RANGE",
+      "why": "RSRP is range-checked per radio technology: -35 dBm is plausible for NR and impossible for LTE."
+    },
+    {
+      "file": "fixtures/apply-rsrp-outside-any-technology.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "A value no radio technology reports is refused by the field range itself."
+    },
+    {
+      "file": "fixtures/apply-lte-identity-out-of-range.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "IDENTITY_OUT_OF_RANGE",
+      "why": "An NR-sized cell identity cannot be labeled LTE."
+    },
+    {
+      "file": "fixtures/apply-uppercase-bssid.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Identifiers are normalized to lowercase so comparison never depends on casing."
+    },
+    {
+      "file": "fixtures/result-applied-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "A complete application: every interface settled and the write is timestamped in boot time."
+    },
+    {
+      "file": "fixtures/result-received-pending-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Receipt only. No interface has progressed and there is no application time."
+    },
+    {
+      "file": "fixtures/result-partial-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Partial failure names exactly which interface did not reach its instructed state."
+    },
+    {
+      "file": "fixtures/result-cells-unavailable-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Unavailable on this image is a different outcome from unsupported by this build."
+    },
+    {
+      "file": "fixtures/result-expired-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "A frame that arrived past validForMs is refused without writing anything."
+    },
+    {
+      "file": "fixtures/result-failed-uncertain-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Wi-Fi was written, cells errored and no rollback was confirmed, so phone state is uncertain."
+    },
+    {
+      "file": "fixtures/result-wrote-without-application-time.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "WROTE_WITHOUT_TIME",
+      "why": "A write always carries its boot-domain time, even inside a failure."
+    },
+    {
+      "file": "fixtures/result-duplicate-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "A repeated sequence returns the stored answer and is flagged as a duplicate, not re-applied."
+    },
+    {
+      "file": "fixtures/result-received-claims-application.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "RECEIPT_CLAIMS_APPLICATION",
+      "why": "RECEIVED cannot report an applied interface. Receipt is never application."
+    },
+    {
+      "file": "fixtures/result-received-with-application-time.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "RECEIPT_CLAIMS_APPLICATION",
+      "why": "An acknowledged frame has no application timestamp."
+    },
+    {
+      "file": "fixtures/result-applied-without-timestamp.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "APPLICATION_TIME_MISSING",
+      "why": "A claimed application must say when, in the phone boot domain, it happened."
+    },
+    {
+      "file": "fixtures/result-applied-with-unsettled-interface.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "LIFECYCLE_CONFLICT",
+      "why": "APPLIED cannot hide an unsupported interface; that is PARTIAL."
+    },
+    {
+      "file": "fixtures/result-partial-with-nothing-failed.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "PARTIAL_NOT_PARTIAL",
+      "why": "PARTIAL requires both a settled and an unsettled interface."
+    },
+    {
+      "file": "fixtures/result-rejected-wrote-state.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "REJECTED_WROTE_STATE",
+      "why": "A rejection means nothing was written."
+    },
+    {
+      "file": "fixtures/result-rejected-without-code.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "REJECTION_MISSING",
+      "why": "Every refusal names a machine-readable code."
+    },
+    {
+      "file": "fixtures/result-rollback-uncertain.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "CERTAINTY_CONFLICT",
+      "why": "An unconfirmed rollback is not a rollback."
+    },
+    {
+      "file": "fixtures/result-applied-before-received.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "CLOCK_ORDER",
+      "why": "Within one boot, application cannot precede receipt."
+    },
+    {
+      "file": "fixtures/result-settled-interface-with-code.json",
+      "messageType": "radio.result",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "OUTCOME_CODE_CONFLICT",
+      "why": "A settled interface carries no reject code."
+    },
+    {
+      "file": "fixtures/readback-measured-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An independent observer reports what the Android APIs returned, with its own package and process."
+    },
+    {
+      "file": "fixtures/readback-empty-measured-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Measured and empty. Distinct from unavailable."
+    },
+    {
+      "file": "fixtures/readback-unavailable-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An interface that could not be read stays unavailable and names why."
+    },
+    {
+      "file": "fixtures/readback-no-modem-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An image with no modem makes cellular readback unavailable however well injection works."
+    },
+    {
+      "file": "fixtures/readback-not-yet-measured-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Wi-Fi scan throttling leaves no post-application scan yet. Not measured is not unavailable."
+    },
+    {
+      "file": "fixtures/readback-unsupported-in-scope-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An interface this build does not hook inside the injected packages is neither match nor mismatch."
+    },
+    {
+      "file": "fixtures/readback-out-of-scope-observer-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "The negative control: a package outside the pattern reports the host's real radios."
+    },
+    {
+      "file": "fixtures/readback-scope-unknown-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An observer whose scope membership was not resolved supports no coverage claim either way."
+    },
+    {
+      "file": "fixtures/readback-additive-mode-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An additive observer sees real networks alongside injected ones; extras are expected there."
+    },
+    {
+      "file": "fixtures/readback-live-scan-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Collection method is recorded per interface: a hooked read and a real scan are different evidence."
+    },
+    {
+      "file": "fixtures/readback-unavailable-with-entries.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Unavailable cannot carry measurements."
+    },
+    {
+      "file": "fixtures/readback-unknown-availability.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Availability is exactly MEASURED, NOT_YET_MEASURED, UNAVAILABLE or UNSUPPORTED_IN_SCOPE."
+    },
+    {
+      "file": "fixtures/readback-missing-collection-method.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "A measured interface must say which API produced the value and whether it was live or cached."
+    },
+    {
+      "file": "fixtures/readback-wrong-scope.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Only an Android API readback counts; a provider acknowledgment does not."
+    },
+    {
+      "file": "fixtures/readback-rf-evidence-claim.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "A readback establishes injection fidelity. It cannot relabel itself as physical RF measurement."
+    },
+    {
+      "file": "fixtures/readback-missing-observer.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "The observing package and process are mandatory, so an echo of the request is identifiable."
+    },
+    {
+      "file": "fixtures/readback-missing-scope-membership.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Whether the observer sits inside the injected packages decides what its report can mean."
+    },
+    {
+      "file": "fixtures/readback-self-observation.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SELF_OBSERVATION",
+      "why": "The applying process cannot be its own observer; that is the weakness the current player has."
+    },
+    {
+      "file": "fixtures/readback-privileged-identifier.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "IMEI, IMSI and ICCID are privileged since Android 10 and are never part of a comparison."
+    },
+    {
+      "file": "fixtures/readback-observed-before-applied.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "CLOCK_ORDER",
+      "why": "An observation cannot precede the application it verifies."
+    },
+    {
+      "file": "fixtures/readback-scan-newer-than-report.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "CLOCK_ORDER",
+      "why": "A scan result cannot be dated after the report carrying it."
+    },
+    {
+      "file": "fixtures/capabilities-package-pattern-valid.json",
+      "messageType": "radio.capabilities",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Three artifacts and a package pattern: the scope Android and the DuoPlus module framework actually allow."
+    },
+    {
+      "file": "fixtures/capabilities-unsupported-interface-valid.json",
+      "messageType": "radio.capabilities",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An unsupported interface is declared explicitly, with the cause distinguishing build from image."
+    },
+    {
+      "file": "fixtures/capabilities-no-modem-valid.json",
+      "messageType": "radio.capabilities",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An image with no modem declares cellular unsupported with the image as the cause."
+    },
+    {
+      "file": "fixtures/capabilities-system-scope-valid.json",
+      "messageType": "radio.capabilities",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Scope beyond the pattern requires a system module and observer evidence from outside it."
+    },
+    {
+      "file": "fixtures/capabilities-system-scope-unproven.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SCOPE_UNPROVEN",
+      "why": "Coverage beyond the injected packages cannot be asserted from one successful in-app callback."
+    },
+    {
+      "file": "fixtures/capabilities-empty-pattern.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SCOPE_UNDECLARED",
+      "why": "The supported scope is a package list, so it cannot be empty."
+    },
+    {
+      "file": "fixtures/capabilities-scope-fingerprint-mismatch.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SCOPE_FINGERPRINT_MISMATCH",
+      "why": "The fingerprint frames are bound to must be derivable from the declared pattern."
+    },
+    {
+      "file": "fixtures/capabilities-cells-without-modem.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "PREREQUISITE_CONFLICT",
+      "why": "Cellular cannot be declared supported on an image probed as having no modem."
+    },
+    {
+      "file": "fixtures/capabilities-missing-signer.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "The signing certificate digest is what distinguishes an in-place update from a rebuild under a new key."
+    },
+    {
+      "file": "fixtures/capabilities-single-artifact.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Applier module and control agent are separate artifacts with separate identities."
+    },
+    {
+      "file": "fixtures/session-open-valid.json",
+      "messageType": "radio.session.open",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "The controller opens a session against expected artifacts and scope; boot and agent identity come back from the phone."
+    },
+    {
+      "file": "fixtures/session-opened-valid.json",
+      "messageType": "radio.session.opened",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "The only sanctioned bridge between simulation time and phone boot time, plus the dataset pin."
+    },
+    {
+      "file": "fixtures/session-opened-foreign-anchor.json",
+      "messageType": "radio.session.opened",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "BOOT_MISMATCH",
+      "why": "A clock anchor from another boot would let a pre-reboot frame look fresh."
+    },
+    {
+      "file": "fixtures/session-opened-unpinned-dataset.json",
+      "messageType": "radio.session.opened",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "DATASET_UNPINNED",
+      "why": "Bounded spatial loading means a run must be pinned to the dataset revision it was planned against."
+    },
+    {
+      "file": "fixtures/session-closed-valid.json",
+      "messageType": "radio.session.closed",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Cleanup confirmed, with nothing left injected."
+    },
+    {
+      "file": "fixtures/session-closed-residual-state.json",
+      "messageType": "radio.session.closed",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "CLEANUP_CONFLICT",
+      "why": "Confirmed cleanup cannot leave injected state behind."
+    },
+    {
+      "file": "fixtures/status-unknown-sequence-valid.json",
+      "messageType": "radio.status",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Reconciliation after a timeout: an unknown sequence is reported as unknown, not as failed."
+    },
+    {
+      "file": "fixtures/status-known-without-result.json",
+      "messageType": "radio.status",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "STATUS_RESULT_MISSING",
+      "why": "A known sequence must return the stored result the controller reconciles against."
+    }
+  ]
+}

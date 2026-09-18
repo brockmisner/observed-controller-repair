@@ -1,0 +1,95 @@
+{
+  "protocol": "duoplus.radio",
+  "protocolVersion": 1,
+  "messageType": "radio.readback",
+  "messageId": "11111111-2222-4333-8444-000000000040",
+  "sentAtWallMs": 1789700000000,
+  "identity": {
+    "tenantId": "workspace-brock",
+    "imageId": "N5YK6",
+    "sessionId": "4f5b3d02-9a2f-4b70-8c31-0a4f0a2d51aa",
+    "bootId": "boot-8812-2f4a1c90",
+    "instanceId": "agent-instance-6d1f0b73",
+    "datasetRevision": "miami-beach-7mi:12"
+  },
+  "scope": "ANDROID_API_READBACK",
+  "evidenceClass": "INJECTION_FIDELITY",
+  "observerProcess": "net.stakeout.duomove.probe:collector",
+  "observerPid": 8241,
+  "observerUid": 10231,
+  "scopeMembership": "IN_SCOPE",
+  "scopeFingerprint": "abb263a4b3c83740ae9f8330a5df1a71515a48c1cc39527536d99948aca07e83",
+  "wifiScanThrottleDisabled": true,
+  "sequence": 92,
+  "frameHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "observedAtBootMs": 963400,
+  "appliedAtBootMs": 963120,
+  "wifi": {
+    "availability": "MEASURED",
+    "measurementMode": "EXCLUSIVE",
+    "collectionMethod": "INJECTED_HOOK",
+    "apiSource": "WifiManager.getScanResults",
+    "entries": [
+      {
+        "bssid": "a4:2b:8c:00:11:22",
+        "ssid": "OceanDrive-2G",
+        "frequencyMHz": 2412,
+        "rssiDbm": -62,
+        "measuredAtBootUs": 963300000
+      },
+      {
+        "bssid": "a4:2b:8c:00:11:23",
+        "ssid": "OceanDrive-5G",
+        "frequencyMHz": 5180,
+        "rssiDbm": -75,
+        "measuredAtBootUs": 963300000
+      }
+    ]
+  },
+  "cells": {
+    "availability": "MEASURED",
+    "measurementMode": "EXCLUSIVE",
+    "collectionMethod": "INJECTED_HOOK",
+    "apiSource": "TelephonyManager.getAllCellInfo",
+    "entries": [
+      {
+        "identifier": "CELL:LTE:310:260:4201:184320011",
+        "registered": true,
+        "rsrpDbm": -86,
+        "rsrqDb": null,
+        "sinrDb": null,
+        "timingAdvance": null,
+        "measuredAtBootMs": 963310
+      },
+      {
+        "identifier": "CELL:LTE:310:260:4201:184320012",
+        "registered": false,
+        "rsrpDbm": -99,
+        "rsrqDb": null,
+        "sinrDb": null,
+        "timingAdvance": null,
+        "measuredAtBootMs": 963310
+      }
+    ]
+  },
+  "bluetooth": {
+    "availability": "MEASURED",
+    "measurementMode": "EXCLUSIVE",
+    "collectionMethod": "INJECTED_HOOK",
+    "apiSource": "BluetoothLeScanner.ScanCallback",
+    "entries": [
+      {
+        "address": "d0:1c:44:9f:2a:10",
+        "name": "Living Room TV",
+        "rssiDbm": -68,
+        "measuredAtBootMs": 963350
+      },
+      {
+        "address": "d0:1c:44:9f:2a:11",
+        "name": null,
+        "rssiDbm": -81,
+        "measuredAtBootMs": 963350
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "protocol": "duoplus.radio",
+  "protocolVersion": 1,
+  "messageType": "radio.status",
+  "messageId": "11111111-2222-4333-8444-000000000085",
+  "sentAtWallMs": 1789700000000,
+  "identity": {
+    "tenantId": "workspace-brock",
+    "imageId": "N5YK6",
+    "sessionId": "4f5b3d02-9a2f-4b70-8c31-0a4f0a2d51aa",
+    "bootId": "boot-8812-2f4a1c90",
+    "instanceId": "agent-instance-6d1f0b73",
+    "datasetRevision": "miami-beach-7mi:12"
+  },
+  "sequence": 47,
+  "known": false,
+  "result": null,
+  "nowBootMs": 919400,
+  "lastAppliedSequence": 46
+}
