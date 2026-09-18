@@ -16,6 +16,26 @@ Both sides validate the same files. A disagreement is a test failure, not a disc
 The controller side runs in `tests/radio-contract.test.ts` (`npm test`). Regenerate the
 fixtures with `npm run fixtures:radio` after changing the generator.
 
+## What the platform allows, and what follows from it
+
+Android has a test-provider API for *location* and **no equivalent for radios**. A modeled Wi-Fi,
+cell or Bluetooth environment can only be produced by hooking client APIs inside named packages,
+which is what a DuoPlus `dplus` module does through its `config.json` `pattern` list. Three
+consequences are built into this contract rather than left to convention:
+
+- **The supported scope is a package list, not the device.** `pattern` is the scope;
+  `scopeFingerprint` binds every frame and every readback to it. A frame computed for a different
+  scope is rejected instead of silently widening or narrowing what the evidence covers.
+- **A readback proves injection fidelity, not physical RF.** `evidenceClass` is the fixed literal
+  `INJECTION_FIDELITY`. An observer *outside* the pattern is a negative control: it should see the
+  host's real radios and not match, and that non-match is a correct result reported as
+  `OUT_OF_SCOPE_CONFIRMED`. An out-of-scope observer that *does* see the injected values is a
+  `SCOPE_LEAK`, because it contradicts the declared scope.
+- **Three artifacts, three identities.** The applier is a `dplus` module with no process of its own,
+  the agent is an ordinary APK owning the authenticated control channel, and the GPS player is
+  unchanged. `bootId` (changes on reboot), `instanceId` (changes when the agent restarts) and
+  `sessionId` (per run) are separate fields on every message.
+
 ## Message flow
 
 | Message | Direction | Purpose |
@@ -57,10 +77,28 @@ the single anchor that bridges `SIM` and `PHONE_BOOT`.
 `cacheIntervalMs`. A sample is never restamped to the frame time, and a sample dated after
 its frame is rejected.
 
-**Readback availability is not emptiness.** `MEASURED` with `entries: []` means read and
-nothing present. `UNAVAILABLE` means it could not be read. `OUT_OF_SCOPE` means the declared
-plugin scope never covered it. The observer's package and process are mandatory so an echo of
-the submitted payload is identifiable.
+**Availability is four states, not four degrees of failure.** `MEASURED` with `entries: []` means
+read and nothing present. `NOT_YET_MEASURED` means no measurement exists yet — the expected state
+while Wi-Fi scanning is throttled. `UNAVAILABLE` means it could not be read, with the reason named
+(`NO_MODEM`, `PERMISSION_DENIED`, `LOCATION_TOGGLE_OFF`, …). `UNSUPPORTED_IN_SCOPE` means this build
+does not hook the interface inside the injected packages. A mismatch is a fifth, separate result
+decided by comparison. The observer's package, process, PID, UID and scope membership are mandatory,
+and the applying process may not observe itself.
 
-**Declared scope is evidence-bound.** `injectionScope: 'TARGET_PACKAGES'` must enumerate its
-packages. `DEVICE_WIDE` requires observer evidence from a package the plugin does not own.
+**Wi-Fi freshness depends on an image prerequisite.** `startScan()` is throttled to 4 scans per
+2 minutes for a foreground app, so a fresh post-application scan requires
+`settings put global wifi_scan_throttle_enabled 0` on the image. The readback reports
+`wifiScanThrottleDisabled`; without it, stale Wi-Fi is `INCONCLUSIVE` with the prerequisite named,
+never a mismatch. `collectionMethod` records whether a value came from a live scan, the platform
+cache, a push callback or the module's own hook — a post-application timestamp on an
+`INJECTED_HOOK` value proves the hook re-ran, not that a radio scanned.
+
+**Privileged identifiers are out of scope entirely.** IMEI, IMSI and ICCID require
+`READ_PRIVILEGED_PHONE_STATE` from Android 10 on, so no ordinary observer can read them back. The
+readback schema is strict and rejects them; they are never part of a comparison.
+
+**Declared scope is evidence-bound.** `injectionScope: 'PACKAGE_PATTERN'` must enumerate its
+packages and its `scopeFingerprint` must be derivable from them. `SYSTEM_MODULE` requires a
+`type: "system"` module plus observer evidence from a package outside the pattern. Declaring an
+interface supported that the probed image cannot provide (no modem, no Bluetooth adapter) is
+rejected.

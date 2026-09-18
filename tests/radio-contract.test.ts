@@ -7,12 +7,13 @@ import { RadioEngine } from '../src/radio/engine.js';
 import { radioRecordSchema } from '../src/radio/schema.js';
 import { hashFrame } from '../src/radio/arrival.js';
 import {
-  RADIO_PROTOCOL, RADIO_PROTOCOL_VERSION, applyRequestFromFrame, applyRequestSchema, assertApplied,
-  interpretResult, simToPhoneBootMs, timedOutVerdict, validateAs, validateMessage,
-  type ApplyRequest, type ApplyResult, type MessageType, type Readback,
+  EVIDENCE_CLASS, PRIVILEGED_UNREADABLE_FIELDS, RADIO_PROTOCOL, RADIO_PROTOCOL_VERSION,
+  applyRequestFromFrame, applyRequestSchema, assertApplied, frameCapabilityViolations, interpretResult,
+  scopeFingerprint, simToPhoneBootMs, timedOutVerdict, validateAs, validateMessage,
+  type ApplyRequest, type ApplyResult, type MessageType, type RadioCapabilities, type Readback,
 } from '../src/radio/contract.js';
 import {
-  CONSERVATIVE_ARRIVAL_POLICY, LATENCY_BUDGET_MS, RECOMMENDED_ARRIVAL_POLICY, SCAN_CADENCE,
+  CONSERVATIVE_ARRIVAL_POLICY, EVIDENCE_CLAIM, LATENCY_BUDGET_MS, RECOMMENDED_ARRIVAL_POLICY, SCAN_CADENCE,
   classifyWarnings, compareReadback, describeAges, freshness, overdueWarnings, sampleAgeMs,
 } from '../src/radio/policy.js';
 
@@ -219,10 +220,148 @@ test('mismatch, unavailable data and unsupported scope remain three different an
   assert.equal(verdictFor(unavailable, 'cells').status, 'UNAVAILABLE');
   assert.equal(verdictFor(unavailable, 'cells').reason, 'PERMISSION_DENIED');
 
-  const outOfScope = compareReadback(request, pair('readback-out-of-scope-valid.json').report);
-  assert.equal(verdictFor(outOfScope, 'bluetooth').status, 'OUT_OF_SCOPE');
-  assert.equal(outOfScope.scopeLimited, true);
-  assert.notEqual(outOfScope.overall, 'MISMATCH');
+  const unsupported = compareReadback(request, pair('readback-unsupported-in-scope-valid.json').report);
+  assert.equal(verdictFor(unsupported, 'bluetooth').status, 'UNSUPPORTED_IN_SCOPE');
+  assert.equal(unsupported.scopeLimited, true);
+  assert.notEqual(unsupported.overall, 'MISMATCH');
+
+  const notYet = compareReadback(request, pair('readback-not-yet-measured-valid.json').report);
+  assert.equal(verdictFor(notYet, 'wifi').status, 'NOT_YET_MEASURED');
+  assert.equal(verdictFor(notYet, 'wifi').reason, 'SCAN_THROTTLED');
+  assert.notEqual(notYet.overall, 'MISMATCH');
+});
+
+test('unavailable, unsupported, not-yet-measured and mismatched are four separate results', () => {
+  const { request, report } = pair();
+  const statuses = new Set([
+    verdictFor(compareReadback(request, pair('readback-no-modem-valid.json').report), 'cells').status,
+    verdictFor(compareReadback(request, pair('readback-unsupported-in-scope-valid.json').report), 'bluetooth').status,
+    verdictFor(compareReadback(request, pair('readback-not-yet-measured-valid.json').report), 'wifi').status,
+    verdictFor(compareReadback(request, { ...report, cells: { ...report.cells, entries: [] } } as Readback), 'cells').status,
+  ]);
+  assert.deepEqual([...statuses].sort(), ['MISMATCH', 'NOT_YET_MEASURED', 'UNAVAILABLE', 'UNSUPPORTED_IN_SCOPE']);
+});
+
+test('an out-of-scope observer is a negative control, never a mismatch', () => {
+  const { request } = pair();
+  const control = compareReadback(request, pair('readback-out-of-scope-observer-valid.json').report);
+  assert.equal(control.role, 'OUT_OF_SCOPE_CONTROL');
+  assert.equal(control.overall, 'OUT_OF_SCOPE_CONFIRMED');
+  assert.equal(control.claim, EVIDENCE_CLAIM.OUT_OF_SCOPE_CONTROL);
+  assert.equal(verdictFor(control, 'wifi').status, 'OUT_OF_SCOPE_CONFIRMED');
+  assert.ok(!control.verdicts.some(v => v.status === 'MISMATCH'));
+});
+
+test('an out-of-scope observer that does see the injected values is a scope leak', () => {
+  const { request, report } = pair();
+  const leaked = compareReadback(request, { ...report, scopeMembership: 'OUT_OF_SCOPE' } as Readback);
+  assert.equal(leaked.role, 'OUT_OF_SCOPE_CONTROL');
+  assert.equal(leaked.overall, 'SCOPE_LEAK');
+  assert.equal(verdictFor(leaked, 'wifi').status, 'SCOPE_LEAK');
+  assert.equal(verdictFor(leaked, 'wifi').reason, 'INJECTED_VALUES_VISIBLE_OUTSIDE_PATTERN');
+});
+
+test('an unresolved observer scope supports no coverage claim in either direction', () => {
+  const { request } = pair();
+  const unknown = compareReadback(request, pair('readback-scope-unknown-valid.json').report);
+  assert.equal(unknown.role, 'SCOPE_UNKNOWN');
+  assert.equal(unknown.overall, 'INCONCLUSIVE');
+  assert.equal(unknown.scopeLimited, true);
+  assert.equal(verdictFor(unknown, 'wifi').reason, 'OBSERVER_SCOPE_UNKNOWN');
+});
+
+test('a readback claims injection fidelity and cannot relabel itself as physical RF', () => {
+  const { report } = pair();
+  assert.equal(report.evidenceClass, EVIDENCE_CLASS);
+  assert.match(EVIDENCE_CLAIM.IN_SCOPE_VERIFICATION, /not physical RF behavior/);
+  const relabelled = validateMessage(fixture('readback-rf-evidence-claim.json'));
+  assert.equal(relabelled.ok, false);
+});
+
+test('privileged SIM and adapter identifiers cannot enter a readback at all', () => {
+  const { report } = pair();
+  for (const field of PRIVILEGED_UNREADABLE_FIELDS) {
+    assert.equal(validateMessage({ ...report, [field]: '310260123456789' }).ok, false, field);
+  }
+  assert.ok(PRIVILEGED_UNREADABLE_FIELDS.includes('imsi'));
+  assert.ok(PRIVILEGED_UNREADABLE_FIELDS.includes('iccid'));
+});
+
+test('a throttled image makes stale Wi-Fi inconclusive and names the missing prerequisite', () => {
+  const { request, report } = pair();
+  const stale = report.wifi.entries!.map(e => ({ ...e, measuredAtBootUs: (report.appliedAtBootMs - 5) * 1000 }));
+  const throttled = compareReadback(request, { ...report, wifiScanThrottleDisabled: false, wifi: { ...report.wifi, entries: stale } } as Readback);
+  assert.equal(verdictFor(throttled, 'wifi').status, 'INCONCLUSIVE');
+  assert.equal(verdictFor(throttled, 'wifi').reason, 'SCAN_THROTTLED_PRE_APPLICATION_ONLY');
+  assert.ok(throttled.warnings.blocking.includes('IMAGE_PREREQUISITE_MISSING:WIFI_SCAN_THROTTLE'));
+  assert.equal(throttled.overall, 'BLOCKED');
+  assert.equal(SCAN_CADENCE.wifi.imagePrerequisite, 'settings put global wifi_scan_throttle_enabled 0');
+});
+
+test('the injected scope is a package list whose fingerprint binds every frame', () => {
+  const capabilities = validateAs('radio.capabilities', fixture('capabilities-package-pattern-valid.json'));
+  const { request } = pair();
+  assert.ok(capabilities.ok);
+  if (!capabilities.ok) return;
+  const value: RadioCapabilities = capabilities.value;
+  assert.equal(value.injectionScope, 'PACKAGE_PATTERN');
+  assert.ok(value.pattern.length >= 1);
+  assert.equal(value.scopeFingerprint, scopeFingerprint(value.pattern));
+  assert.equal(scopeFingerprint(['A.B', 'a.b ']), scopeFingerprint(['a.b']));
+  assert.throws(() => scopeFingerprint([]), /at least one package/);
+  assert.equal(request.scopeFingerprint, value.scopeFingerprint);
+
+  const foreign = { ...request, scopeFingerprint: scopeFingerprint(['com.other.app']) } as ApplyRequest;
+  assert.throws(() => compareReadback(foreign, pair().report), /different injected scope/);
+  assert.ok(frameCapabilityViolations(foreign, value).some(v => v.code === 'SCOPE_CHANGED'));
+});
+
+test('a frame is checked against the declared capability before it is sent', () => {
+  const capabilities = validateAs('radio.capabilities', fixture('capabilities-package-pattern-valid.json'));
+  const arrival = validateAs('radio.apply', fixture('apply-arrival-valid.json'));
+  assert.ok(capabilities.ok && arrival.ok);
+  if (!capabilities.ok || !arrival.ok) return;
+  assert.deepEqual(frameCapabilityViolations(arrival.value, capabilities.value), []);
+
+  const noCells = validateAs('radio.capabilities', fixture('capabilities-no-modem-valid.json'));
+  assert.ok(noCells.ok);
+  if (!noCells.ok) return;
+  const violations = frameCapabilityViolations(arrival.value, noCells.value);
+  assert.ok(violations.some(v => v.code === 'INTERFACE_UNAVAILABLE' && v.field === 'cells'));
+
+  for (const change of [{ bootId: 'boot-other' }, { instanceId: 'agent-other' }, { imageId: 'OTHER' }]) {
+    const drifted = { ...arrival.value, identity: { ...arrival.value.identity, ...change } } as ApplyRequest;
+    assert.ok(frameCapabilityViolations(drifted, capabilities.value).length >= 1, Object.keys(change)[0]);
+  }
+});
+
+test('boot, agent process and session identity are three separate fields', () => {
+  const opened = validateAs('radio.session.opened', fixture('session-opened-valid.json'));
+  assert.ok(opened.ok);
+  if (!opened.ok) return;
+  const { bootId, instanceId, sessionId } = opened.value.identity;
+  assert.equal(new Set([bootId, instanceId, sessionId]).size, 3);
+  assert.equal(opened.value.clockAnchor.bootIdSource, 'BOOT_COUNT_UUID');
+  assert.ok(Number.isInteger(opened.value.clockAnchor.bootCount));
+  for (const field of ['bootId', 'instanceId'] as const) {
+    const missing = validateMessage({ ...opened.value, identity: { ...opened.value.identity, [field]: undefined } });
+    assert.equal(missing.ok, false, field);
+  }
+});
+
+test('the applying process cannot serve as its own observer', () => {
+  const rejected = validateMessage(fixture('readback-self-observation.json'));
+  assert.equal(rejected.ok, false);
+  if (!rejected.ok) assert.equal(rejected.detail, 'SELF_OBSERVATION');
+});
+
+test('a session must be pinned to the dataset revision it was planned against', () => {
+  const unpinned = validateMessage(fixture('session-opened-unpinned-dataset.json'));
+  assert.equal(unpinned.ok, false);
+  if (!unpinned.ok) assert.equal(unpinned.detail, 'DATASET_UNPINNED');
+  const { request, report } = pair();
+  const otherRevision = { ...report, identity: { ...report.identity, datasetRevision: 'miami-beach-7mi:13' } } as Readback;
+  assert.throws(() => compareReadback(request, otherRevision), /does not correlate/);
 });
 
 test('a power reading beyond tolerance is a mismatch, and one inside it is not', () => {
@@ -330,7 +469,8 @@ const records = [
   radioRecordSchema.parse({ ...position, kind: 'BLUETOOTH', identifier: '10:11:22:33:44:55' }),
 ];
 const context = {
-  messageId: '22222222-3333-4444-8555-666666666666', bootId: 'boot-1', sentAtWallMs: 1789700000000,
+  messageId: '22222222-3333-4444-8555-666666666666', bootId: 'boot-1', instanceId: 'agent-1',
+  scopeFingerprint: scopeFingerprint(['com.android.chrome']), sentAtWallMs: 1789700000000,
   wifiCacheIntervalMs: 30000, bluetoothCacheIntervalMs: 30000, wifiSampledSimElapsedMs: 0, bluetoothSampledSimElapsedMs: null,
 };
 
@@ -343,6 +483,8 @@ test('a modeled frame converts to a valid request that keeps the model hold/repl
   assert.equal(request.bluetooth.directive, 'HOLD');
   assert.equal(request.wifi.directive, 'REPLACE');
   assert.equal(request.identity.bootId, 'boot-1');
+  assert.equal(request.identity.instanceId, 'agent-1');
+  assert.equal(request.scopeFingerprint, context.scopeFingerprint);
   assert.equal(request.sequence, moving.sequence);
   assert.equal(request.simElapsedMs, moving.elapsedMs);
 

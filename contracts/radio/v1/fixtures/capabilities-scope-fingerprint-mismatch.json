@@ -1,0 +1,98 @@
+{
+  "protocol": "duoplus.radio",
+  "protocolVersion": 1,
+  "messageType": "radio.capabilities",
+  "messageId": "11111111-2222-4333-8444-000000000060",
+  "sentAtWallMs": 1789700000000,
+  "imageId": "N5YK6",
+  "bootId": "boot-8812-2f4a1c90",
+  "instanceId": "agent-instance-6d1f0b73",
+  "artifacts": {
+    "agent": {
+      "packageName": "net.stakeout.duomove.radioagent",
+      "versionName": "0.1.0",
+      "versionCode": 1,
+      "apkSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "signerCertSha256": "e491a1530d21de5adedfea0c166dff502ca773fb60a1667e88ad9bd0320fe451",
+      "sourceCommit": "4e9ee9f"
+    },
+    "module": {
+      "packageName": "net.stakeout.duomove.radiomodule",
+      "versionName": "0.1.0",
+      "versionCode": 1,
+      "apkSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "signerCertSha256": "e491a1530d21de5adedfea0c166dff502ca773fb60a1667e88ad9bd0320fe451",
+      "sourceCommit": "4e9ee9f",
+      "moduleName": "duomove-radio",
+      "moduleType": "user"
+    },
+    "player": {
+      "packageName": "net.stakeout.duomove.player",
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apkSha256": "620d7714280e98048a16d7fcd0320fed3d8925c7377997eadad4b99adfcd5dbf",
+      "signerCertSha256": "e491a1530d21de5adedfea0c166dff502ca773fb60a1667e88ad9bd0320fe451",
+      "sourceCommit": "4e9ee9f"
+    }
+  },
+  "androidRelease": "13",
+  "sdkInt": 33,
+  "abi": "arm64-v8a",
+  "imageTemplate": "duoplus-android13-default",
+  "pluginFrameworkVersion": "dpbridge-1",
+  "injectionScope": "PACKAGE_PATTERN",
+  "pattern": [
+    "com.android.chrome",
+    "com.google.android.googlequicksearchbox",
+    "net.stakeout.duomove.probe",
+    "com.example.extra"
+  ],
+  "scopeFingerprint": "abb263a4b3c83740ae9f8330a5df1a71515a48c1cc39527536d99948aca07e83",
+  "systemScopeEvidence": null,
+  "imagePrerequisites": {
+    "wifiScanThrottleDisabled": true,
+    "locationMasterToggleOn": true,
+    "modemPresent": true,
+    "bluetoothAdapterPresent": true,
+    "probedAtWallMs": 1789699000000
+  },
+  "interfaces": {
+    "wifi": {
+      "supported": true,
+      "androidApis": [
+        "WifiManager.getScanResults"
+      ],
+      "measurementMode": "EXCLUSIVE",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "minRefreshIntervalMs": 30000,
+      "hooksPushDelivery": true
+    },
+    "cells": {
+      "supported": true,
+      "androidApis": [
+        "TelephonyManager.getAllCellInfo",
+        "TelephonyCallback.CellInfoListener"
+      ],
+      "measurementMode": "EXCLUSIVE",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "minRefreshIntervalMs": 1000,
+      "hooksPushDelivery": true
+    },
+    "bluetooth": {
+      "supported": true,
+      "androidApis": [
+        "BluetoothLeScanner.startScan"
+      ],
+      "measurementMode": "EXCLUSIVE",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "minRefreshIntervalMs": 30000,
+      "hooksPushDelivery": false
+    }
+  }
+}

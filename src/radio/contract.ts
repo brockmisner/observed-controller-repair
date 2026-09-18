@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { positionSchema } from './schema.js';
 import type { RadioFrame } from './engine.js';
@@ -8,9 +9,30 @@ import type { RadioFrame } from './engine.js';
  * The controller and the plugin validate the same fixtures in `contracts/radio/v1`.
  * Nothing here applies radio state; these are message shapes plus the cross-field rules
  * that keep receipt, application and observation separate.
+ *
+ * Android has no radio equivalent of `LocationManager.addTestProvider`. A modeled Wi-Fi,
+ * cell or Bluetooth environment can only be produced by hooking client APIs inside named
+ * packages, which is what a DuoPlus `dplus` module does through its `config.json` `pattern`
+ * list. Two consequences run through every message here: the supported scope is a package
+ * list rather than the device, and a readback proves that the hook ran with the right
+ * identity — never that a radio measured anything.
  */
 export const RADIO_PROTOCOL = 'duoplus.radio';
 export const RADIO_PROTOCOL_VERSION = 1;
+
+/**
+ * The claim a readback can support. Carried on every report so saved evidence cannot later be
+ * read as physical RF verification.
+ */
+export const EVIDENCE_CLASS = 'INJECTION_FIDELITY' as const;
+
+/**
+ * Privileged since Android 10, so no ordinary observer can read them back. The synthetic values
+ * in `src/env/sim.ts` are controller-side configuration and are never part of a comparison.
+ * Listed so the exclusion is explicit rather than an omission; the readback schema is strict,
+ * so a report carrying any of them is rejected.
+ */
+export const PRIVILEGED_UNREADABLE_FIELDS = ['imei', 'imsi', 'iccid', 'msin', 'simSerialNumber', 'subscriberId', 'bluetoothAdapterAddress'] as const;
 
 /**
  * B05. Every time value belongs to exactly one named domain and may only be compared
@@ -27,8 +49,9 @@ export type ClockDomain = (typeof CLOCK_DOMAINS)[number];
 
 export const REJECT_CODES = [
   'PROTOCOL_VERSION_UNSUPPORTED', 'MESSAGE_TYPE_UNSUPPORTED', 'MALFORMED_MESSAGE',
-  'AUTH_FAILED', 'IDENTITY_MISMATCH', 'SESSION_UNKNOWN', 'BOOT_MISMATCH', 'CLOCK_UNANCHORED',
-  'SEQUENCE_REPLAY', 'FRAME_EXPIRED', 'FIELD_UNSUPPORTED', 'INTERFACE_UNAVAILABLE',
+  'AUTH_FAILED', 'IDENTITY_MISMATCH', 'SESSION_UNKNOWN', 'BOOT_MISMATCH', 'INSTANCE_MISMATCH',
+  'CLOCK_UNANCHORED', 'SEQUENCE_REPLAY', 'FRAME_EXPIRED', 'FIELD_UNSUPPORTED',
+  'INTERFACE_UNAVAILABLE', 'SCOPE_NOT_INJECTED', 'SCOPE_CHANGED', 'IMAGE_PREREQUISITE_MISSING',
   'PERMISSION_DENIED', 'PAYLOAD_TOO_LARGE', 'RATE_LIMITED', 'INTERNAL_ERROR',
 ] as const;
 export type RejectCode = (typeof REJECT_CODES)[number];
@@ -46,12 +69,27 @@ const identifier = z.string().min(1).max(200);
 const mac = z.string().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/, 'Lowercase colon-separated MAC required');
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 
-/** Carried by every message so a stray frame cannot be matched to the wrong phone, session or boot. */
+/**
+ * Carried by every message so a stray frame cannot be matched to the wrong phone, session, boot
+ * or agent process. Three runtime identities stay separate because they change for different
+ * reasons: `bootId` on reboot, `instanceId` when the agent process restarts, `sessionId` per run.
+ */
 export const identitySchema = z.object({
   tenantId: identifier, imageId: identifier, sessionId: z.string().uuid(),
-  bootId: identifier, datasetRevision: identifier,
+  bootId: identifier, instanceId: identifier, datasetRevision: identifier,
 }).strict();
 export type RadioIdentity = z.infer<typeof identitySchema>;
+
+/**
+ * A02. The injected scope is the module's `pattern` package list. Its fingerprint travels on
+ * capabilities, on the opened session and on every frame, so a scope change invalidates frames
+ * computed for the previous scope instead of silently widening or narrowing the claim.
+ */
+export function scopeFingerprint(pattern: readonly string[]): string {
+  const normalized = [...new Set(pattern.map(p => p.trim().toLowerCase()))].sort();
+  if (!normalized.length || normalized.some(p => !p)) throw new Error('Injected scope must name at least one package');
+  return createHash('sha256').update(normalized.join('\n')).digest('hex');
+}
 
 const envelopeFields = {
   protocol: z.literal(RADIO_PROTOCOL),
@@ -65,7 +103,15 @@ const envelopeFields = {
  * session, invalidated by any `bootId` change, and never re-derived from wall clock.
  */
 export const clockAnchorSchema = z.object({
-  bootId: identifier, simElapsedMs: elapsed, phoneBootMs: elapsed, wallMs: elapsed,
+  bootId: identifier,
+  /**
+   * Android has no public boot-ID API and `/proc/sys/kernel/random/boot_id` is not dependably
+   * readable under SELinux, so `bootId` is a UUID minted whenever `Settings.Global.BOOT_COUNT`
+   * changes. The count travels with it so the derivation is auditable.
+   */
+  bootCount: int(0, Number.MAX_SAFE_INTEGER),
+  bootIdSource: z.literal('BOOT_COUNT_UUID'),
+  simElapsedMs: elapsed, phoneBootMs: elapsed, wallMs: elapsed,
   uncertaintyMs: int(0, 5000),
 }).strict();
 export type ClockAnchor = z.infer<typeof clockAnchorSchema>;
@@ -80,12 +126,57 @@ export function simToPhoneBootMs(anchor: ClockAnchor, simElapsedMs: number): num
 // ---------------------------------------------------------------------------
 
 /**
- * A02. `TARGET_PACKAGES` is what DuoPlus plugin documentation actually describes.
- * `DEVICE_WIDE` may only be declared together with observer evidence from a package
- * the plugin does not own, so one successful in-app callback cannot imply fleet coverage.
+ * A02. `PACKAGE_PATTERN` is what the DuoPlus module framework provides: a `config.json` `pattern`
+ * array naming the packages the module takes effect in, with `Entry.init(Application)` running
+ * inside each of those processes. Faked radio values exist only there.
+ *
+ * `SYSTEM_MODULE` widens that, but only a `type: "system"` module proven on the image can claim
+ * it, so the schema requires observer evidence from a package outside the pattern.
  */
-export const INJECTION_SCOPES = ['SELF_PROCESS', 'TARGET_PACKAGES', 'DEVICE_WIDE'] as const;
+export const INJECTION_SCOPES = ['PACKAGE_PATTERN', 'SYSTEM_MODULE'] as const;
 export const MEASUREMENT_MODES = ['EXCLUSIVE', 'ADDITIVE'] as const;
+
+const artifactSchema = z.object({
+  packageName: z.string().min(1).max(200),
+  versionName: z.string().min(1).max(80),
+  versionCode: int(1, Number.MAX_SAFE_INTEGER),
+  apkSha256: sha256,
+  /** A08. What distinguishes an in-place update from a rebuild under a different key. */
+  signerCertSha256: sha256,
+  sourceCommit: z.string().regex(/^[a-f0-9]{7,40}$/),
+}).strict();
+
+/**
+ * Three artifacts, three identities. The applier is a `dplus` module with no process of its own;
+ * the agent is an ordinary APK owning the authenticated control channel and the current frame;
+ * the GPS player is unchanged and reported only so one artifact's result never stands in for
+ * another's.
+ */
+const artifactsSchema = z.object({
+  agent: artifactSchema,
+  module: artifactSchema.extend({
+    /** The name `dplus dump` reports, which is what `dplus uninstall` takes. */
+    moduleName: z.string().min(1).max(200),
+    moduleType: z.enum(['user', 'system']),
+  }).strict(),
+  player: artifactSchema.nullable(),
+}).strict();
+
+/**
+ * §11 of the build brief: facts about the image that shrink or enable the release, probed rather
+ * than assumed. A missing prerequisite is a readiness failure, not a mismatch at acceptance time.
+ */
+const imagePrerequisitesSchema = z.object({
+  /** `settings put global wifi_scan_throttle_enabled 0`. Without it, no live scan is reliably fresh. */
+  wifiScanThrottleDisabled: z.boolean(),
+  /** Wi-Fi scan results and cell info return empty to apps when the master toggle is off. */
+  locationMasterToggleOn: z.boolean(),
+  /** A cloud phone may have no modem, in which case cellular readback is unavailable regardless of injection. */
+  modemPresent: z.boolean(),
+  /** With no adapter the arrival Bluetooth action has nothing to act on. */
+  bluetoothAdapterPresent: z.boolean(),
+  probedAtWallMs: elapsed,
+}).strict();
 
 const interfaceCapabilitySchema = z.discriminatedUnion('supported', [
   z.object({
@@ -94,11 +185,14 @@ const interfaceCapabilitySchema = z.discriminatedUnion('supported', [
     measurementMode: z.enum(MEASUREMENT_MODES),
     permissions: z.array(z.string().min(1).max(200)).max(20).default([]),
     minRefreshIntervalMs: int(1000, 1800000),
-    scanThrottleDisabled: z.boolean().default(false),
+    /** Covering only the pull API leaves any app that registers a listener unhooked. */
+    hooksPushDelivery: z.boolean(),
   }).strict(),
   z.object({
     supported: z.literal(false),
     reason: z.string().min(1).max(300),
+    /** Unsupported by this build, or unavailable on this image. Different problems, different fixes. */
+    cause: z.enum(['NOT_IMPLEMENTED', 'IMAGE_LACKS_HARDWARE', 'PERMISSION_UNAVAILABLE', 'API_UNSUPPORTED']),
   }).strict(),
 ]);
 
@@ -106,30 +200,42 @@ export const capabilitiesSchema = z.object({
   ...envelopeFields,
   messageType: z.literal('radio.capabilities'),
   imageId: identifier,
-  pluginPackage: z.string().min(1).max(200),
-  pluginVersionName: z.string().min(1).max(80),
-  pluginVersionCode: int(1, Number.MAX_SAFE_INTEGER),
-  apkSha256: sha256,
-  sourceCommit: z.string().regex(/^[a-f0-9]{7,40}$/),
+  bootId: identifier,
+  instanceId: identifier,
+  artifacts: artifactsSchema,
   androidRelease: z.string().min(1).max(20),
   sdkInt: int(21, 100),
   abi: z.string().min(1).max(40),
   imageTemplate: z.string().min(1).max(200),
   pluginFrameworkVersion: z.string().min(1).max(80),
   injectionScope: z.enum(INJECTION_SCOPES),
-  targetPackages: z.array(z.string().min(1).max(200)).max(100).default([]),
-  deviceWideEvidence: z.object({
+  /** The module's `config.json` `pattern` list. This is the supported scope. */
+  pattern: z.array(z.string().min(1).max(200)).max(100),
+  scopeFingerprint: sha256,
+  systemScopeEvidence: z.object({
     observerPackage: z.string().min(1).max(200), observerProcess: z.string().min(1).max(200), verifiedAtWallMs: elapsed,
   }).strict().nullable().default(null),
+  imagePrerequisites: imagePrerequisitesSchema,
   interfaces: z.object({
     wifi: interfaceCapabilitySchema, cells: interfaceCapabilitySchema, bluetooth: interfaceCapabilitySchema,
   }).strict(),
 }).strict().superRefine((c, ctx) => {
-  if (c.injectionScope === 'TARGET_PACKAGES' && !c.targetPackages.length) {
-    fail(ctx, ['targetPackages'], 'TARGET_PACKAGES scope must enumerate the packages it covers', 'SCOPE_UNDECLARED');
+  if (!c.pattern.length) {
+    fail(ctx, ['pattern'], 'Injected scope must enumerate the packages the module takes effect in', 'SCOPE_UNDECLARED');
+  } else if (c.scopeFingerprint !== scopeFingerprint(c.pattern)) {
+    fail(ctx, ['scopeFingerprint'], 'Scope fingerprint does not match the declared package pattern', 'SCOPE_FINGERPRINT_MISMATCH');
   }
-  if (c.injectionScope === 'DEVICE_WIDE' && !c.deviceWideEvidence) {
-    fail(ctx, ['deviceWideEvidence'], 'Device-wide scope requires observer evidence from another package', 'SCOPE_UNPROVEN');
+  if (c.injectionScope === 'SYSTEM_MODULE' && (!c.systemScopeEvidence || c.artifacts.module.moduleType !== 'system')) {
+    fail(ctx, ['systemScopeEvidence'], 'Scope beyond the package pattern requires a system module and observer evidence from outside it', 'SCOPE_UNPROVEN');
+  }
+  if (c.injectionScope === 'PACKAGE_PATTERN' && c.systemScopeEvidence) {
+    fail(ctx, ['systemScopeEvidence'], 'Package-pattern scope cannot carry system-wide evidence', 'SCOPE_CONFLICT');
+  }
+  if (c.interfaces.cells.supported && !c.imagePrerequisites.modemPresent) {
+    fail(ctx, ['interfaces', 'cells'], 'Cellular readback cannot be supported on an image with no modem', 'PREREQUISITE_CONFLICT');
+  }
+  if (c.interfaces.bluetooth.supported && !c.imagePrerequisites.bluetoothAdapterPresent) {
+    fail(ctx, ['interfaces', 'bluetooth'], 'Bluetooth cannot be supported on an image with no adapter', 'PREREQUISITE_CONFLICT');
   }
 });
 export type RadioCapabilities = z.infer<typeof capabilitiesSchema>;
@@ -157,6 +263,13 @@ const wifiEntrySchema = z.object({
   bssid: mac, ssid: z.string().min(1).max(32), frequencyMHz: int(2400, 7125), rssiDbm: int(-127, 0),
 }).strict();
 
+/**
+ * E02/E03. `LTE` and `NR` only, matching what `src/radio/engine.ts` can actually model: an explicit
+ * identity, a frequency and explicit propagation parameters. Pre-LTE observations without a
+ * frequency cannot satisfy that, so a dataset holding only GSM/UMTS records means cellular is
+ * declared unsupported for the release rather than modeled from guessed inputs. Adding a pre-LTE
+ * technology is a protocol version bump plus model work, not a field addition.
+ */
 const cellEntrySchema = z.object({
   identifier: z.string().min(1).max(200), rat: z.enum(['LTE', 'NR']),
   mcc: z.string().regex(/^\d{3}$/), mnc: z.string().regex(/^\d{2,3}$/),
@@ -214,6 +327,12 @@ export const applyRequestSchema = z.object({
   simElapsedMs: elapsed,
   /** B06. The plugin must not apply this frame after `validForMs` past receipt. */
   validForMs: int(250, 30000).default(5000),
+  /**
+   * A02. The scope this frame was computed for. The agent rejects a frame whose fingerprint does
+   * not match the module's current `pattern`, so a scope change cannot silently widen or narrow
+   * what the evidence covers.
+   */
+  scopeFingerprint: sha256,
   phase: z.enum(APPLY_PHASES),
   /** Correlation only. GPS is applied by the player, never by this message. */
   position: positionSchema,
@@ -268,7 +387,12 @@ export const WIRE_LIFECYCLE = ['RECEIVED', 'VALIDATED', 'APPLIED', 'PARTIAL', 'R
 export type WireLifecycle = (typeof WIRE_LIFECYCLE)[number];
 export type ControllerApplicationState = WireLifecycle | 'TIMED_OUT';
 
-export const INTERFACE_OUTCOMES = ['PENDING', 'APPLIED', 'HELD', 'CLEARED', 'REJECTED', 'UNSUPPORTED', 'UNAVAILABLE', 'FAILED'] as const;
+/**
+ * `UNSUPPORTED_IN_SCOPE` (this build does not hook the interface), `UNAVAILABLE` (the image cannot
+ * provide it at all) and `FAILED` (the write errored) are three different problems with three
+ * different fixes. `PENDING` means not yet attempted, which is never a degree of failure.
+ */
+export const INTERFACE_OUTCOMES = ['PENDING', 'APPLIED', 'HELD', 'CLEARED', 'REJECTED', 'UNSUPPORTED_IN_SCOPE', 'UNAVAILABLE', 'FAILED'] as const;
 export type InterfaceOutcome = (typeof INTERFACE_OUTCOMES)[number];
 const SETTLED_OK: InterfaceOutcome[] = ['APPLIED', 'HELD', 'CLEARED'];
 const WROTE_STATE: InterfaceOutcome[] = ['APPLIED', 'CLEARED'];
@@ -361,25 +485,44 @@ export const statusSchema = z.object({
 // A05/E05 — independent readback
 // ---------------------------------------------------------------------------
 
-export const AVAILABILITY = ['MEASURED', 'UNAVAILABLE', 'OUT_OF_SCOPE'] as const;
+/**
+ * E05. Four states, not four degrees of failure:
+ *
+ * - `MEASURED`             the API was called and returned; `entries: []` means read and empty.
+ * - `NOT_YET_MEASURED`     no measurement exists for this interface since application. With Wi-Fi
+ *                          scan throttling on, this is the expected state inside a short window.
+ * - `UNAVAILABLE`          the value could not be read at all, with the reason named.
+ * - `UNSUPPORTED_IN_SCOPE` this build does not hook the interface inside the injected packages.
+ *
+ * A mismatch is a fifth, separate result and is decided by comparison, never by availability.
+ */
+export const AVAILABILITY = ['MEASURED', 'NOT_YET_MEASURED', 'UNAVAILABLE', 'UNSUPPORTED_IN_SCOPE'] as const;
 export const UNAVAILABLE_REASONS = [
-  'PERMISSION_DENIED', 'INTERFACE_DISABLED', 'API_UNSUPPORTED', 'SCAN_THROTTLED', 'NO_RESULT_YET', 'READ_FAILED',
+  'PERMISSION_DENIED', 'INTERFACE_DISABLED', 'API_UNSUPPORTED', 'LOCATION_TOGGLE_OFF',
+  'NO_MODEM', 'NO_BLUETOOTH_ADAPTER', 'READ_FAILED',
 ] as const;
+export const NOT_YET_MEASURED_REASONS = ['SCAN_THROTTLED', 'SCAN_IN_PROGRESS', 'NO_CALLBACK_YET', 'CACHE_PREDATES_APPLICATION'] as const;
 
 /**
- * E05. `MEASURED` with `entries: []` means the interface was read and nothing was present.
- * `UNAVAILABLE` means it could not be read. `OUT_OF_SCOPE` means the declared plugin scope
- * never covered it. These must not collapse into one another.
+ * A05/§5.6 of the build brief. `INJECTED_HOOK` is the honest label when the value came back from the
+ * module's own hook: a post-application timestamp on such a value proves the hook re-ran, not that a
+ * radio scanned. `PLATFORM_CACHE` and `LIVE_SCAN` are the paths Wi-Fi throttling constrains.
  */
+export const COLLECTION_METHODS = ['LIVE_SCAN', 'PLATFORM_CACHE', 'PUSH_CALLBACK', 'INJECTED_HOOK'] as const;
+
 const measurementBlock = <T extends z.ZodTypeAny>(entry: T, max: number) => z.discriminatedUnion('availability', [
   z.object({
     availability: z.literal('MEASURED'), entries: z.array(entry).max(max), measurementMode: z.enum(MEASUREMENT_MODES),
+    collectionMethod: z.enum(COLLECTION_METHODS), apiSource: z.string().min(1).max(200),
+  }).strict(),
+  z.object({
+    availability: z.literal('NOT_YET_MEASURED'), reason: z.enum(NOT_YET_MEASURED_REASONS), entries: z.null(),
   }).strict(),
   z.object({
     availability: z.literal('UNAVAILABLE'), reason: z.enum(UNAVAILABLE_REASONS), entries: z.null(),
   }).strict(),
   z.object({
-    availability: z.literal('OUT_OF_SCOPE'), reason: z.string().min(1).max(300), entries: z.null(),
+    availability: z.literal('UNSUPPORTED_IN_SCOPE'), reason: z.string().min(1).max(300), entries: z.null(),
   }).strict(),
 ]);
 
@@ -395,14 +538,36 @@ const bluetoothObservationSchema = z.object({
   address: mac, name: z.string().max(248).nullable().default(null), rssiDbm: int(-127, 0), measuredAtBootMs: elapsed,
 }).strict();
 
+/**
+ * A02/A05. Whether the observing package is inside the module's `pattern` decides what its report
+ * can mean. An in-scope observer's match is the fidelity evidence. An out-of-scope observer is a
+ * negative control: it *should* report the host's real radios and not match, and that non-match is
+ * a correct result, not a failure. `UNKNOWN` supports no claim in either direction.
+ */
+export const SCOPE_MEMBERSHIPS = ['IN_SCOPE', 'OUT_OF_SCOPE', 'UNKNOWN'] as const;
+export type ScopeMembership = (typeof SCOPE_MEMBERSHIPS)[number];
+
 export const readbackSchema = z.object({
   ...envelopeFields,
   messageType: z.literal('radio.readback'),
   identity: identitySchema,
   scope: z.literal('ANDROID_API_READBACK'),
+  /** Fixed. Injection fidelity and scope are what a readback can establish; physical RF is not. */
+  evidenceClass: z.literal(EVIDENCE_CLASS),
   /** A05. Who read the values, so an echo of the submitted payload is distinguishable. */
   observerPackage: z.string().min(1).max(200),
   observerProcess: z.string().min(1).max(200),
+  observerPid: int(1, 4194304),
+  observerUid: int(0, 2147483647),
+  scopeMembership: z.enum(SCOPE_MEMBERSHIPS),
+  /** The scope the observer resolved membership against; must match the frame it verifies. */
+  scopeFingerprint: sha256,
+  /**
+   * E04. Read from `Settings.Global.wifi_scan_throttle_enabled`. When throttling is on, a fresh
+   * post-application scan is not reliably obtainable, and Wi-Fi verification is inconclusive rather
+   * than mismatched.
+   */
+  wifiScanThrottleDisabled: z.boolean(),
   sequence: elapsed,
   frameHash: sha256,
   observedAtBootMs: elapsed,
@@ -415,6 +580,9 @@ export const readbackSchema = z.object({
   if (r.observedAtBootMs < r.appliedAtBootMs) {
     fail(ctx, ['observedAtBootMs'], 'Observation cannot precede the application it verifies', 'CLOCK_ORDER');
   }
+  if (r.scopeMembership === 'IN_SCOPE' && r.observerProcess === r.identity.instanceId) {
+    fail(ctx, ['observerProcess'], 'The applying process cannot observe itself', 'SELF_OBSERVATION');
+  }
   if (r.wifi.availability === 'MEASURED') {
     for (const [i, entry] of r.wifi.entries.entries()) {
       if (Math.floor(entry.measuredAtBootUs / 1000) > r.observedAtBootMs) {
@@ -425,18 +593,30 @@ export const readbackSchema = z.object({
 });
 export type Readback = z.infer<typeof readbackSchema>;
 
+/** Boot and agent-process identity are answers, not requests, so the open message omits both. */
 export const sessionOpenSchema = z.object({
-  ...envelopeFields, messageType: z.literal('radio.session.open'), identity: identitySchema.omit({ bootId: true }),
-  expectedCapabilities: z.object({ apkSha256: sha256, pluginVersionCode: int(1, Number.MAX_SAFE_INTEGER) }).strict(),
+  ...envelopeFields, messageType: z.literal('radio.session.open'),
+  identity: identitySchema.omit({ bootId: true, instanceId: true }),
+  expectedArtifacts: z.object({
+    agentApkSha256: sha256, agentVersionCode: int(1, Number.MAX_SAFE_INTEGER),
+    moduleApkSha256: sha256, moduleName: z.string().min(1).max(200),
+  }).strict(),
+  expectedScopeFingerprint: sha256,
   simStartWallMs: elapsed,
 }).strict();
 
 export const sessionOpenedSchema = z.object({
   ...envelopeFields, messageType: z.literal('radio.session.opened'), identity: identitySchema,
   clockAnchor: clockAnchorSchema, capabilitiesMessageId: z.string().uuid(),
+  scopeFingerprint: sha256,
+  /** H02/E01. The dataset revision the run is pinned to; a change mid-session ends the session. */
+  datasetRevisionPinned: z.boolean(),
 }).strict().superRefine((s, ctx) => {
   if (s.clockAnchor.bootId !== s.identity.bootId) {
     fail(ctx, ['clockAnchor', 'bootId'], 'The clock anchor belongs to the session boot identity', 'BOOT_MISMATCH');
+  }
+  if (!s.datasetRevisionPinned) {
+    fail(ctx, ['datasetRevisionPinned'], 'A session must be pinned to the dataset revision it was planned against', 'DATASET_UNPINNED');
   }
 });
 
@@ -589,11 +769,49 @@ export function assertApplied(result: ApplyResult): void {
 }
 
 // ---------------------------------------------------------------------------
+// A02 — frames must stay inside the declared scope and capability
+// ---------------------------------------------------------------------------
+
+export interface CapabilityViolation { code: RejectCode; field: string; message: string }
+
+/**
+ * A02/E02. Checks a frame against what the build actually declared, before it is sent. A frame that
+ * asks an unsupported interface to change, or that was computed for a different injected scope, is a
+ * controller-side error rather than something to discover from a plugin rejection.
+ */
+export function frameCapabilityViolations(request: ApplyRequest, capabilities: RadioCapabilities): CapabilityViolation[] {
+  const violations: CapabilityViolation[] = [];
+  if (request.scopeFingerprint !== capabilities.scopeFingerprint) {
+    violations.push({ code: 'SCOPE_CHANGED', field: 'scopeFingerprint', message: 'Frame was computed for a different injected package scope' });
+  }
+  if (request.identity.imageId !== capabilities.imageId) {
+    violations.push({ code: 'IDENTITY_MISMATCH', field: 'identity.imageId', message: 'Frame targets a different physical image' });
+  }
+  if (request.identity.bootId !== capabilities.bootId) {
+    violations.push({ code: 'BOOT_MISMATCH', field: 'identity.bootId', message: 'Frame belongs to a previous boot' });
+  }
+  if (request.identity.instanceId !== capabilities.instanceId) {
+    violations.push({ code: 'INSTANCE_MISMATCH', field: 'identity.instanceId', message: 'Frame belongs to a previous agent process' });
+  }
+  if (!capabilities.imagePrerequisites.locationMasterToggleOn) {
+    violations.push({ code: 'IMAGE_PREREQUISITE_MISSING', field: 'imagePrerequisites.locationMasterToggleOn', message: 'Wi-Fi scan results and cell info return empty while the location toggle is off' });
+  }
+  for (const name of ['wifi', 'cells', 'bluetooth'] as const) {
+    const capability = capabilities.interfaces[name];
+    if (request[name].directive === 'REPLACE' && !capability.supported) {
+      violations.push({ code: 'INTERFACE_UNAVAILABLE', field: name, message: `${name} is declared unsupported on this build or image: ${capability.reason}` });
+    }
+  }
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
 // Bridge from the modeled frame to the wire request
 // ---------------------------------------------------------------------------
 
 export interface FrameRequestContext {
-  messageId: string; bootId: string; sentAtWallMs: number; frameHash: string;
+  messageId: string; bootId: string; instanceId: string; scopeFingerprint: string;
+  sentAtWallMs: number; frameHash: string;
   wifiCacheIntervalMs: number; bluetoothCacheIntervalMs: number; validForMs?: number;
   /** Frames whose Bluetooth is held do not carry a Bluetooth sample time. */
   wifiSampledSimElapsedMs: number; bluetoothSampledSimElapsedMs: number | null;
@@ -611,9 +829,10 @@ export function applyRequestFromFrame(frame: RadioFrame, context: FrameRequestCo
     messageId: context.messageId, sentAtWallMs: context.sentAtWallMs,
     identity: {
       tenantId: frame.tenantId, imageId: frame.imageId, sessionId: frame.sessionId,
-      bootId: context.bootId, datasetRevision: frame.datasetRevision,
+      bootId: context.bootId, instanceId: context.instanceId, datasetRevision: frame.datasetRevision,
     },
     sequence: frame.sequence, simElapsedMs: frame.elapsedMs, validForMs: context.validForMs ?? 5000,
+    scopeFingerprint: context.scopeFingerprint,
     phase: replaceBluetooth ? ('ARRIVED' as const) : ('MOVING' as const),
     position: frame.position, frameHash: context.frameHash,
     wifi: {

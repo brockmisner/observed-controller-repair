@@ -1,4 +1,4 @@
-import { MEASUREMENT_MODES, type ApplyRequest, type Readback } from './contract.js';
+import { AVAILABILITY, MEASUREMENT_MODES, type ApplyRequest, type Readback } from './contract.js';
 
 /**
  * Frozen freshness, latency and comparison policy for the radio integration
@@ -14,17 +14,20 @@ import { MEASUREMENT_MODES, type ApplyRequest, type Readback } from './contract.
 export const SCAN_CADENCE = {
   wifi: {
     defaultIntervalMs: 30000, minIntervalMs: 10000, maxIntervalMs: 300000,
-    androidThrottle: '4 scans per 120000 ms per foreground app (Android 9+)',
-    belowDefaultRequires: 'capabilities.interfaces.wifi.scanThrottleDisabled === true',
+    androidThrottle: '4 scans per 120000 ms foreground, 1 per 30 minutes background (Android 9+); a scan itself takes 2-4 s',
+    imagePrerequisite: 'settings put global wifi_scan_throttle_enabled 0',
+    belowDefaultRequires: 'capabilities.imagePrerequisites.wifiScanThrottleDisabled === true',
   },
   cells: {
     defaultIntervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 30000,
-    androidThrottle: 'none documented for CellInfo reads; TelephonyManager may return cached CellInfo',
+    androidThrottle: 'platform refreshes getAllCellInfo at most ~1 Hz and returns cached or null data to background apps',
+    imagePrerequisite: 'a modem must be present; a cloud phone may return an empty cell list',
     belowDefaultRequires: null,
   },
   bluetooth: {
     defaultIntervalMs: 30000, minIntervalMs: 15000, maxIntervalMs: 300000,
     androidThrottle: 'classic discovery takes roughly 12 s per cycle',
+    imagePrerequisite: 'a Bluetooth adapter must be present',
     belowDefaultRequires: null,
   },
 } as const;
@@ -117,6 +120,7 @@ export interface WarningPolicy {
 const ALL_WARNINGS = [
   'WIFI_METADATA_MISSING', 'BLUETOOTH_METADATA_MISSING', 'CELL_METADATA_MISSING', 'NO_ELIGIBLE_CELL',
   'SECTOR_UNKNOWN', 'COVERAGE_SPARSE', 'SCAN_CACHE_OVERDUE', 'CLOCK_UNANCHORED',
+  'IMAGE_PREREQUISITE_MISSING', 'DATASET_WINDOW_INCOMPLETE',
 ] as const;
 
 /**
@@ -158,8 +162,34 @@ export function classifyWarnings(warnings: readonly string[], policy: WarningPol
 // E05 — readback comparison
 // ---------------------------------------------------------------------------
 
-export const VERDICT_STATUSES = ['MATCH', 'MISMATCH', 'UNAVAILABLE', 'OUT_OF_SCOPE', 'INCONCLUSIVE', 'NOT_REQUESTED'] as const;
+/**
+ * E05. Availability, scope and mismatch are separate answers.
+ *
+ * - `MATCH` / `MISMATCH`       decided by comparison, and only for an in-scope observer.
+ * - `NOT_YET_MEASURED`         no measurement exists yet; expected while Wi-Fi scanning is throttled.
+ * - `UNAVAILABLE`              the interface could not be read on this image.
+ * - `UNSUPPORTED_IN_SCOPE`     this build does not hook the interface inside the injected packages.
+ * - `INCONCLUSIVE`             measured, but the measurement cannot settle the question.
+ * - `NOT_REQUESTED`            the frame held or cleared this interface.
+ * - `OUT_OF_SCOPE_CONFIRMED`   an out-of-scope observer correctly did not see the injected values.
+ * - `SCOPE_LEAK`               an out-of-scope observer did see them, so the declared scope is wrong.
+ */
+export const VERDICT_STATUSES = [
+  'MATCH', 'MISMATCH', 'NOT_YET_MEASURED', 'UNAVAILABLE', 'UNSUPPORTED_IN_SCOPE', 'INCONCLUSIVE',
+  'NOT_REQUESTED', 'OUT_OF_SCOPE_CONFIRMED', 'SCOPE_LEAK',
+] as const;
 export type VerdictStatus = (typeof VERDICT_STATUSES)[number];
+
+/**
+ * What a readback can establish. An injected value read back through the module's own hook proves
+ * the hook ran with the right identity and scope; it is not a measurement of radio hardware.
+ */
+export const EVIDENCE_CLAIM = {
+  IN_SCOPE_VERIFICATION: 'The listed packages observe the modeled environment. This establishes injection fidelity, scope and identity binding, not physical RF behavior.',
+  OUT_OF_SCOPE_CONTROL: 'A package outside the injected scope observes the host\'s real radios, which confirms the scope boundary.',
+  SCOPE_UNKNOWN: 'Observer scope membership was not resolved, so this report supports no coverage claim.',
+} as const;
+export type ComparisonRole = keyof typeof EVIDENCE_CLAIM;
 
 export interface FieldDifference { identity: string; field: string; expected: number | string; observed: number | string }
 
@@ -179,9 +209,12 @@ export interface InterfaceVerdict {
 }
 
 export interface ComparisonResult {
+  /** Decided by the observer's scope membership, because that fixes what the report can mean. */
+  role: ComparisonRole;
+  claim: string;
   verdicts: InterfaceVerdict[];
-  overall: 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE' | 'BLOCKED';
-  /** True when an interface was outside the declared plugin scope, so the claim is narrower. */
+  overall: 'VERIFIED' | 'MISMATCH' | 'INCONCLUSIVE' | 'BLOCKED' | 'OUT_OF_SCOPE_CONFIRMED' | 'SCOPE_LEAK';
+  /** True when an interface was unsupported in scope or unavailable, so the claim is narrower. */
   scopeLimited: boolean;
   warnings: ClassifiedWarnings;
 }
@@ -189,12 +222,19 @@ export interface ComparisonResult {
 type Observation = { identity: string; measuredAtBootMs: number; fields: Record<string, number | string> };
 type Expectation = { identity: string; fields: Record<string, number | string> };
 
+interface InterfaceInput {
+  name: ScanInterface;
+  expectations: Expectation[];
+  observations: Observation[] | null;
+  availability: (typeof AVAILABILITY)[number];
+  reason: string | null;
+  measurementMode: (typeof MEASUREMENT_MODES)[number] | null;
+}
+
 function compareInterface(
-  name: ScanInterface, request: ApplyRequest, report: Readback, policy: WarningPolicy,
-  expectations: Expectation[], observations: Observation[] | null,
-  availability: 'MEASURED' | 'UNAVAILABLE' | 'OUT_OF_SCOPE', reason: string | null,
-  measurementMode: (typeof MEASUREMENT_MODES)[number] | null,
+  input: InterfaceInput, request: ApplyRequest, report: Readback, policy: WarningPolicy, role: ComparisonRole,
 ): InterfaceVerdict {
+  const { name, expectations, observations, availability, reason, measurementMode } = input;
   const base = {
     interface: name, missing: [] as string[], staleOnly: [] as string[], mismatched: [] as FieldDifference[],
     extra: [] as string[], toleranceDb: policy.toleranceDb, measurementMode,
@@ -202,8 +242,9 @@ function compareInterface(
   const directive = request[name].directive;
   if (directive === 'HOLD') return { ...base, status: 'NOT_REQUESTED', reason: 'HELD_NOT_VERIFIED' };
   if (directive === 'CLEAR') return { ...base, status: 'NOT_REQUESTED', reason: 'CLEAR_NOT_VERIFIED_BY_IDENTITY' };
-  if (availability === 'OUT_OF_SCOPE') return { ...base, status: 'OUT_OF_SCOPE', reason };
-  if (availability === 'UNAVAILABLE' || observations === null) return { ...base, status: 'UNAVAILABLE', reason };
+  if (availability === 'UNSUPPORTED_IN_SCOPE') return { ...base, status: 'UNSUPPORTED_IN_SCOPE', reason };
+  if (availability === 'UNAVAILABLE') return { ...base, status: 'UNAVAILABLE', reason };
+  if (availability === 'NOT_YET_MEASURED' || observations === null) return { ...base, status: 'NOT_YET_MEASURED', reason };
 
   const applied = report.appliedAtBootMs;
   const post = new Map(observations.filter(o => o.measuredAtBootMs >= applied).map(o => [o.identity, o]));
@@ -225,16 +266,32 @@ function compareInterface(
   }
   const expected = new Set(expectations.map(e => e.identity));
   base.extra = [...post.keys()].filter(identity => !expected.has(identity));
-  const exclusive = measurementMode === 'EXCLUSIVE';
+  const matchedAny = expectations.length > 0 && base.missing.length === 0 && base.staleOnly.length === 0 && base.mismatched.length === 0;
 
+  // An out-of-scope observer is a negative control. Not seeing the injected values is the correct
+  // result and must never be reported as a mismatch; seeing them contradicts the declared scope.
+  if (role === 'OUT_OF_SCOPE_CONTROL') {
+    if (!expectations.length) return { ...base, status: 'INCONCLUSIVE', reason: 'NOTHING_INJECTED_TO_CONTROL_FOR' };
+    return matchedAny
+      ? { ...base, status: 'SCOPE_LEAK', reason: 'INJECTED_VALUES_VISIBLE_OUTSIDE_PATTERN' }
+      : { ...base, status: 'OUT_OF_SCOPE_CONFIRMED', reason: 'HOST_RADIOS_OBSERVED_AS_EXPECTED' };
+  }
+  if (role === 'SCOPE_UNKNOWN') return { ...base, status: 'INCONCLUSIVE', reason: 'OBSERVER_SCOPE_UNKNOWN' };
+
+  const exclusive = measurementMode === 'EXCLUSIVE';
   if (!expectations.length) {
     if (!exclusive) return { ...base, status: 'INCONCLUSIVE', reason: 'ADDITIVE_ABSENCE_UNVERIFIABLE' };
     return base.extra.length ? { ...base, status: 'MISMATCH', reason: 'UNEXPECTED_OBSERVATION' } : { ...base, status: 'MATCH', reason: null };
   }
+  // E04. With Wi-Fi scan throttling on, a fresh post-application scan is not reliably obtainable,
+  // so an all-stale Wi-Fi result is an image prerequisite problem rather than a phone mismatch.
+  const throttled = name === 'wifi' && !report.wifiScanThrottleDisabled;
+  if (base.staleOnly.length === expectations.length && !base.mismatched.length) {
+    return { ...base, status: 'INCONCLUSIVE', reason: throttled ? 'SCAN_THROTTLED_PRE_APPLICATION_ONLY' : 'PRE_APPLICATION_ONLY' };
+  }
   if (base.missing.length || base.mismatched.length) return { ...base, status: 'MISMATCH', reason: base.missing.length ? 'EXPECTED_IDENTITY_ABSENT' : 'MEASUREMENT_OUTSIDE_TOLERANCE' };
   if (exclusive && base.extra.length) return { ...base, status: 'MISMATCH', reason: 'UNEXPECTED_OBSERVATION' };
-  if (base.staleOnly.length === expectations.length) return { ...base, status: 'INCONCLUSIVE', reason: 'PRE_APPLICATION_ONLY' };
-  if (base.staleOnly.length) return { ...base, status: 'INCONCLUSIVE', reason: 'PARTIALLY_PRE_APPLICATION' };
+  if (base.staleOnly.length) return { ...base, status: 'INCONCLUSIVE', reason: throttled ? 'SCAN_THROTTLED_PARTIALLY_PRE_APPLICATION' : 'PARTIALLY_PRE_APPLICATION' };
   return { ...base, status: 'MATCH', reason: null };
 }
 
@@ -244,39 +301,69 @@ function compareInterface(
  * full-coverage claim.
  */
 export function compareReadback(request: ApplyRequest, report: Readback, policy: WarningPolicy = CONSERVATIVE_ARRIVAL_POLICY): ComparisonResult {
-  if (request.identity.imageId !== report.identity.imageId || request.identity.sessionId !== report.identity.sessionId ||
-      request.identity.bootId !== report.identity.bootId || request.frameHash !== report.frameHash || request.sequence !== report.sequence) {
+  const identity = request.identity;
+  const observed = report.identity;
+  if (identity.imageId !== observed.imageId || identity.sessionId !== observed.sessionId ||
+      identity.bootId !== observed.bootId || identity.instanceId !== observed.instanceId ||
+      identity.datasetRevision !== observed.datasetRevision ||
+      request.frameHash !== report.frameHash || request.sequence !== report.sequence) {
     throw new Error('Readback does not correlate with the requested frame');
   }
-  const wifi = compareInterface('wifi', request, report, policy,
-    request.wifi.directive === 'REPLACE' ? request.wifi.entries.map(e => ({ identity: e.bssid, fields: { ssid: e.ssid, frequencyMHz: e.frequencyMHz, rssiDbm: e.rssiDbm } })) : [],
-    report.wifi.availability === 'MEASURED'
-      ? report.wifi.entries.map(e => ({ identity: e.bssid.toLowerCase(), measuredAtBootMs: Math.floor(e.measuredAtBootUs / 1000), fields: { ssid: e.ssid, frequencyMHz: e.frequencyMHz, rssiDbm: e.rssiDbm } }))
-      : null,
-    report.wifi.availability, report.wifi.availability === 'MEASURED' ? null : report.wifi.reason,
-    report.wifi.availability === 'MEASURED' ? report.wifi.measurementMode : null);
+  if (request.scopeFingerprint !== report.scopeFingerprint) {
+    throw new Error('Readback resolved scope membership against a different injected scope');
+  }
+  const role: ComparisonRole = report.scopeMembership === 'IN_SCOPE' ? 'IN_SCOPE_VERIFICATION'
+    : report.scopeMembership === 'OUT_OF_SCOPE' ? 'OUT_OF_SCOPE_CONTROL' : 'SCOPE_UNKNOWN';
 
-  const cells = compareInterface('cells', request, report, policy,
-    request.cells.directive === 'REPLACE' ? request.cells.entries.map(e => ({ identity: e.identifier, fields: { registered: String(e.registered), rsrpDbm: e.rsrpDbm } })) : [],
-    report.cells.availability === 'MEASURED'
-      ? report.cells.entries.map(e => ({ identity: e.identifier, measuredAtBootMs: e.measuredAtBootMs, fields: { registered: String(e.registered), rsrpDbm: e.rsrpDbm } }))
-      : null,
-    report.cells.availability, report.cells.availability === 'MEASURED' ? null : report.cells.reason,
-    report.cells.availability === 'MEASURED' ? report.cells.measurementMode : null);
+  const inputs: InterfaceInput[] = [
+    {
+      name: 'wifi',
+      expectations: request.wifi.directive === 'REPLACE'
+        ? request.wifi.entries.map(e => ({ identity: e.bssid, fields: { ssid: e.ssid, frequencyMHz: e.frequencyMHz, rssiDbm: e.rssiDbm } })) : [],
+      observations: report.wifi.availability === 'MEASURED'
+        ? report.wifi.entries.map(e => ({ identity: e.bssid.toLowerCase(), measuredAtBootMs: Math.floor(e.measuredAtBootUs / 1000), fields: { ssid: e.ssid, frequencyMHz: e.frequencyMHz, rssiDbm: e.rssiDbm } })) : null,
+      availability: report.wifi.availability,
+      reason: report.wifi.availability === 'MEASURED' ? null : report.wifi.reason,
+      measurementMode: report.wifi.availability === 'MEASURED' ? report.wifi.measurementMode : null,
+    },
+    {
+      name: 'cells',
+      expectations: request.cells.directive === 'REPLACE'
+        ? request.cells.entries.map(e => ({ identity: e.identifier, fields: { registered: String(e.registered), rsrpDbm: e.rsrpDbm } })) : [],
+      observations: report.cells.availability === 'MEASURED'
+        ? report.cells.entries.map(e => ({ identity: e.identifier, measuredAtBootMs: e.measuredAtBootMs, fields: { registered: String(e.registered), rsrpDbm: e.rsrpDbm } })) : null,
+      availability: report.cells.availability,
+      reason: report.cells.availability === 'MEASURED' ? null : report.cells.reason,
+      measurementMode: report.cells.availability === 'MEASURED' ? report.cells.measurementMode : null,
+    },
+    {
+      name: 'bluetooth',
+      expectations: request.bluetooth.directive === 'REPLACE'
+        ? request.bluetooth.entries.map(e => ({ identity: e.address, fields: { rssiDbm: e.rssiDbm } })) : [],
+      observations: report.bluetooth.availability === 'MEASURED'
+        ? report.bluetooth.entries.map(e => ({ identity: e.address.toLowerCase(), measuredAtBootMs: e.measuredAtBootMs, fields: { rssiDbm: e.rssiDbm } })) : null,
+      availability: report.bluetooth.availability,
+      reason: report.bluetooth.availability === 'MEASURED' ? null : report.bluetooth.reason,
+      measurementMode: report.bluetooth.availability === 'MEASURED' ? report.bluetooth.measurementMode : null,
+    },
+  ];
+  const verdicts = inputs.map(input => compareInterface(input, request, report, policy, role));
+  const extra = [...overdueWarnings(request)];
+  if (!report.wifiScanThrottleDisabled && request.wifi.directive === 'REPLACE') extra.push('IMAGE_PREREQUISITE_MISSING:WIFI_SCAN_THROTTLE');
+  const warnings = classifyWarnings([...request.warnings, ...extra], policy);
+  const narrowed = verdicts.some(v => v.status === 'UNSUPPORTED_IN_SCOPE' || v.status === 'UNAVAILABLE');
 
-  const bluetooth = compareInterface('bluetooth', request, report, policy,
-    request.bluetooth.directive === 'REPLACE' ? request.bluetooth.entries.map(e => ({ identity: e.address, fields: { rssiDbm: e.rssiDbm } })) : [],
-    report.bluetooth.availability === 'MEASURED'
-      ? report.bluetooth.entries.map(e => ({ identity: e.address.toLowerCase(), measuredAtBootMs: e.measuredAtBootMs, fields: { rssiDbm: e.rssiDbm } }))
-      : null,
-    report.bluetooth.availability, report.bluetooth.availability === 'MEASURED' ? null : report.bluetooth.reason,
-    report.bluetooth.availability === 'MEASURED' ? report.bluetooth.measurementMode : null);
-
-  const verdicts = [wifi, cells, bluetooth];
-  const warnings = classifyWarnings([...request.warnings, ...overdueWarnings(request)], policy);
+  if (role === 'OUT_OF_SCOPE_CONTROL') {
+    const overall = verdicts.some(v => v.status === 'SCOPE_LEAK') ? 'SCOPE_LEAK'
+      : verdicts.some(v => v.status === 'OUT_OF_SCOPE_CONFIRMED') ? 'OUT_OF_SCOPE_CONFIRMED' : 'INCONCLUSIVE';
+    return { role, claim: EVIDENCE_CLAIM[role], verdicts, overall, scopeLimited: narrowed, warnings };
+  }
+  if (role === 'SCOPE_UNKNOWN') {
+    return { role, claim: EVIDENCE_CLAIM[role], verdicts, overall: 'INCONCLUSIVE', scopeLimited: true, warnings };
+  }
   const overall = warnings.blocking.length ? 'BLOCKED'
-    : verdicts.some(v => v.status === 'MISMATCH') ? 'MISMATCH'
-    : verdicts.some(v => v.status === 'INCONCLUSIVE' || v.status === 'UNAVAILABLE') ? 'INCONCLUSIVE'
+    : verdicts.some(v => v.status === 'MISMATCH' || v.status === 'SCOPE_LEAK') ? 'MISMATCH'
+    : verdicts.some(v => v.status === 'INCONCLUSIVE' || v.status === 'UNAVAILABLE' || v.status === 'NOT_YET_MEASURED') ? 'INCONCLUSIVE'
     : verdicts.some(v => v.status === 'MATCH') ? 'VERIFIED' : 'INCONCLUSIVE';
-  return { verdicts, overall, scopeLimited: verdicts.some(v => v.status === 'OUT_OF_SCOPE'), warnings };
+  return { role, claim: EVIDENCE_CLAIM[role], verdicts, overall, scopeLimited: narrowed, warnings };
 }

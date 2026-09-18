@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,21 +16,32 @@ const target = resolve(root, 'contracts/radio/v1');
 const PROTOCOL = 'duoplus.radio';
 const VERSION = 1;
 const SESSION = '4f5b3d02-9a2f-4b70-8c31-0a4f0a2d51aa';
-const BOOT = 'boot-2026-09-18T11:02:14Z-8812';
+const BOOT = 'boot-8812-2f4a1c90';
+const INSTANCE = 'agent-instance-6d1f0b73';
 const FRAME_HASH = 'a'.repeat(64);
-const APK_SHA = 'b'.repeat(64);
+const AGENT_SHA = 'b'.repeat(64);
+const MODULE_SHA = 'c'.repeat(64);
+const PLAYER_SHA = '620d7714280e98048a16d7fcd0320fed3d8925c7377997eadad4b99adfcd5dbf';
+const SIGNER_SHA = 'e491a1530d21de5adedfea0c166dff502ca773fb60a1667e88ad9bd0320fe451';
 const messageId = suffix => `11111111-2222-4333-8444-${String(suffix).padStart(12, '0')}`;
 
+/** The module's config.json `pattern`: the packages the injected environment is visible inside. */
+const PATTERN = ['com.android.chrome', 'com.google.android.googlequicksearchbox', 'net.stakeout.duomove.probe'];
+const scopeFingerprint = pattern =>
+  createHash('sha256').update([...new Set(pattern.map(p => p.trim().toLowerCase()))].sort().join('\n')).digest('hex');
+const SCOPE = scopeFingerprint(PATTERN);
+
 const identity = {
-  tenantId: 'workspace-brock', imageId: 'N5YK6', sessionId: SESSION, bootId: BOOT, datasetRevision: 'city-boise:7',
+  tenantId: 'workspace-brock', imageId: 'N5YK6', sessionId: SESSION, bootId: BOOT, instanceId: INSTANCE,
+  datasetRevision: 'miami-beach-7mi:12',
 };
 const envelope = (messageType, suffix) => ({
   protocol: PROTOCOL, protocolVersion: VERSION, messageType, messageId: messageId(suffix), sentAtWallMs: 1789700000000,
 });
 
 const wifiEntries = [
-  { bssid: 'a4:2b:8c:00:11:22', ssid: 'BoiseFiber-2G', frequencyMHz: 2412, rssiDbm: -61 },
-  { bssid: 'a4:2b:8c:00:11:23', ssid: 'BoiseFiber-5G', frequencyMHz: 5180, rssiDbm: -74 },
+  { bssid: 'a4:2b:8c:00:11:22', ssid: 'OceanDrive-2G', frequencyMHz: 2412, rssiDbm: -61 },
+  { bssid: 'a4:2b:8c:00:11:23', ssid: 'OceanDrive-5G', frequencyMHz: 5180, rssiDbm: -74 },
 ];
 const cellEntries = [
   {
@@ -61,8 +73,9 @@ const applyMoving = () => ({
   sequence: 47,
   simElapsedMs: 47000,
   validForMs: 5000,
+  scopeFingerprint: SCOPE,
   phase: 'MOVING',
-  position: { lat: 43.61295, lng: -116.20287 },
+  position: { lat: 25.79065, lng: -80.13000 },
   frameHash: FRAME_HASH,
   wifi: replace(wifiEntries, 30000, 30000),
   cells: replace(cellEntries, 47000, 1000),
@@ -103,59 +116,101 @@ const resultApplied = () => ({
   rolledBack: false,
 });
 
+/** An in-scope observer: a process inside the module's `pattern`, separate from the applier. */
 const readbackMeasured = () => ({
   ...envelope('radio.readback', 40),
   identity,
   scope: 'ANDROID_API_READBACK',
-  observerPackage: 'net.stakeout.duomove.observer',
-  observerProcess: 'net.stakeout.duomove.observer:probe',
+  evidenceClass: 'INJECTION_FIDELITY',
+  observerPackage: 'net.stakeout.duomove.probe',
+  observerProcess: 'net.stakeout.duomove.probe:collector',
+  observerPid: 8241,
+  observerUid: 10231,
+  scopeMembership: 'IN_SCOPE',
+  scopeFingerprint: SCOPE,
+  wifiScanThrottleDisabled: true,
   sequence: 92,
   frameHash: FRAME_HASH,
   observedAtBootMs: 963400,
   appliedAtBootMs: 963120,
   wifi: {
-    availability: 'MEASURED', measurementMode: 'EXCLUSIVE',
+    availability: 'MEASURED', measurementMode: 'EXCLUSIVE', collectionMethod: 'INJECTED_HOOK',
+    apiSource: 'WifiManager.getScanResults',
     entries: wifiEntries.map(w => ({ ...w, rssiDbm: w.rssiDbm - 1, measuredAtBootUs: 963300000 })),
   },
   cells: {
-    availability: 'MEASURED', measurementMode: 'EXCLUSIVE',
+    availability: 'MEASURED', measurementMode: 'EXCLUSIVE', collectionMethod: 'INJECTED_HOOK',
+    apiSource: 'TelephonyManager.getAllCellInfo',
     entries: cellEntries.map(c => ({
       identifier: c.identifier, registered: c.registered, rsrpDbm: c.rsrpDbm + 2, rsrqDb: null, sinrDb: null,
       timingAdvance: null, measuredAtBootMs: 963310,
     })),
   },
   bluetooth: {
-    availability: 'MEASURED', measurementMode: 'EXCLUSIVE',
+    availability: 'MEASURED', measurementMode: 'EXCLUSIVE', collectionMethod: 'INJECTED_HOOK',
+    apiSource: 'BluetoothLeScanner.ScanCallback',
     entries: bluetoothEntries.map(b => ({ address: b.address, name: b.name, rssiDbm: b.rssiDbm, measuredAtBootMs: 963350 })),
   },
 });
 
+/** The negative control: a package outside `pattern` correctly sees the host's real radios. */
+const readbackOutOfScope = () => variant(readbackMeasured(), m => {
+  m.messageId = messageId(41);
+  m.observerPackage = 'net.stakeout.duomove.outsider';
+  m.observerProcess = 'net.stakeout.duomove.outsider';
+  m.observerPid = 8302;
+  m.observerUid = 10244;
+  m.scopeMembership = 'OUT_OF_SCOPE';
+  m.wifi = {
+    availability: 'MEASURED', measurementMode: 'ADDITIVE', collectionMethod: 'PLATFORM_CACHE',
+    apiSource: 'WifiManager.getScanResults',
+    entries: [{ bssid: 'ff:ee:dd:00:00:01', ssid: 'HostRealAP', frequencyMHz: 2437, rssiDbm: -70, measuredAtBootUs: 963300000 }],
+  };
+  m.cells = { availability: 'UNAVAILABLE', reason: 'NO_MODEM', entries: null };
+  m.bluetooth = { availability: 'MEASURED', measurementMode: 'ADDITIVE', collectionMethod: 'LIVE_SCAN', apiSource: 'BluetoothLeScanner.ScanCallback', entries: [] };
+});
+
 const capability = (overrides = {}) => ({
   supported: true, androidApis: ['WifiManager.getScanResults'], measurementMode: 'EXCLUSIVE',
-  permissions: ['android.permission.ACCESS_FINE_LOCATION'], minRefreshIntervalMs: 30000, scanThrottleDisabled: false,
+  permissions: ['android.permission.ACCESS_FINE_LOCATION'], minRefreshIntervalMs: 30000, hooksPushDelivery: false,
   ...overrides,
+});
+
+const artifact = (overrides = {}) => ({
+  packageName: 'net.stakeout.duomove.radioagent', versionName: '0.1.0', versionCode: 1,
+  apkSha256: AGENT_SHA, signerCertSha256: SIGNER_SHA, sourceCommit: '4e9ee9f', ...overrides,
 });
 
 const capabilities = () => ({
   ...envelope('radio.capabilities', 60),
   imageId: 'N5YK6',
-  pluginPackage: 'net.stakeout.duomove.radio',
-  pluginVersionName: '0.1.0',
-  pluginVersionCode: 1,
-  apkSha256: APK_SHA,
-  sourceCommit: '4e9ee9f',
+  bootId: BOOT,
+  instanceId: INSTANCE,
+  artifacts: {
+    agent: artifact(),
+    module: artifact({
+      packageName: 'net.stakeout.duomove.radiomodule', apkSha256: MODULE_SHA,
+      moduleName: 'duomove-radio', moduleType: 'user',
+    }),
+    player: artifact({ packageName: 'net.stakeout.duomove.player', versionName: '1.0.0', apkSha256: PLAYER_SHA }),
+  },
   androidRelease: '13',
   sdkInt: 33,
   abi: 'arm64-v8a',
   imageTemplate: 'duoplus-android13-default',
   pluginFrameworkVersion: 'dpbridge-1',
-  injectionScope: 'TARGET_PACKAGES',
-  targetPackages: ['com.android.chrome', 'com.google.android.googlequicksearchbox'],
-  deviceWideEvidence: null,
+  injectionScope: 'PACKAGE_PATTERN',
+  pattern: PATTERN,
+  scopeFingerprint: SCOPE,
+  systemScopeEvidence: null,
+  imagePrerequisites: {
+    wifiScanThrottleDisabled: true, locationMasterToggleOn: true, modemPresent: true,
+    bluetoothAdapterPresent: true, probedAtWallMs: 1789699000000,
+  },
   interfaces: {
-    wifi: capability(),
-    cells: capability({ androidApis: ['TelephonyManager.getAllCellInfo'], minRefreshIntervalMs: 1000 }),
-    bluetooth: capability({ androidApis: ['BluetoothAdapter.startDiscovery'], minRefreshIntervalMs: 30000 }),
+    wifi: capability({ hooksPushDelivery: true }),
+    cells: capability({ androidApis: ['TelephonyManager.getAllCellInfo', 'TelephonyCallback.CellInfoListener'], minRefreshIntervalMs: 1000, hooksPushDelivery: true }),
+    bluetooth: capability({ androidApis: ['BluetoothLeScanner.startScan'], minRefreshIntervalMs: 30000 }),
   },
 });
 
@@ -213,6 +268,12 @@ const cases = [
   ['apply-missing-boot-id.json', 'radio.apply', 'REJECT', 'MALFORMED_MESSAGE', null,
     'Boot identity is mandatory; without it a pre-reboot frame could be applied after a restart.',
     variant(applyMoving(), m => { delete m.identity.bootId; })],
+  ['apply-missing-instance-id.json', 'radio.apply', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'Agent process identity is separate from boot identity and equally mandatory.',
+    variant(applyMoving(), m => { delete m.identity.instanceId; })],
+  ['apply-missing-scope-fingerprint.json', 'radio.apply', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'Every frame states the injected package scope it was computed for.',
+    variant(applyMoving(), m => { delete m.scopeFingerprint; })],
   ['apply-unknown-field.json', 'radio.apply', 'REJECT', 'MALFORMED_MESSAGE', null,
     'Unknown fields are refused. Extensions arrive through capability negotiation, not silent tolerance.',
     variant(applyMoving(), m => { m.rsrqModel = 'estimated'; })],
@@ -255,7 +316,13 @@ const cases = [
     'Partial failure names exactly which interface did not reach its instructed state.',
     variant(resultApplied(), m => {
       m.lifecycle = 'PARTIAL';
-      m.interfaces.cells = interfaceResult('UNSUPPORTED', null, 'FIELD_UNSUPPORTED', 'timingAdvance injection is not implemented');
+      m.interfaces.cells = interfaceResult('UNSUPPORTED_IN_SCOPE', null, 'FIELD_UNSUPPORTED', 'timingAdvance injection is not implemented');
+    })],
+  ['result-cells-unavailable-valid.json', 'radio.result', 'ACCEPT', null, null,
+    'Unavailable on this image is a different outcome from unsupported by this build.',
+    variant(resultApplied(), m => {
+      m.lifecycle = 'PARTIAL';
+      m.interfaces.cells = interfaceResult('UNAVAILABLE', null, 'INTERFACE_UNAVAILABLE', 'This image reports no modem');
     })],
   ['result-expired-valid.json', 'radio.result', 'ACCEPT', null, null,
     'A frame that arrived past validForMs is refused without writing anything.',
@@ -296,7 +363,7 @@ const cases = [
     variant(resultApplied(), m => { m.appliedAtBootMs = null; })],
   ['result-applied-with-unsettled-interface.json', 'radio.result', 'REJECT', 'MALFORMED_MESSAGE', 'LIFECYCLE_CONFLICT',
     'APPLIED cannot hide an unsupported interface; that is PARTIAL.',
-    variant(resultApplied(), m => { m.interfaces.bluetooth = interfaceResult('UNSUPPORTED', null, 'FIELD_UNSUPPORTED', 'no adapter'); })],
+    variant(resultApplied(), m => { m.interfaces.bluetooth = interfaceResult('UNSUPPORTED_IN_SCOPE', null, 'FIELD_UNSUPPORTED', 'not hooked in this build'); })],
   ['result-partial-with-nothing-failed.json', 'radio.result', 'REJECT', 'MALFORMED_MESSAGE', 'PARTIAL_NOT_PARTIAL',
     'PARTIAL requires both a settled and an unsettled interface.',
     variant(resultApplied(), m => { m.lifecycle = 'PARTIAL'; })],
@@ -332,31 +399,64 @@ const cases = [
     readbackMeasured()],
   ['readback-empty-measured-valid.json', 'radio.readback', 'ACCEPT', null, null,
     'Measured and empty. Distinct from unavailable.',
-    variant(readbackMeasured(), m => { m.bluetooth = { availability: 'MEASURED', measurementMode: 'EXCLUSIVE', entries: [] }; })],
+    variant(readbackMeasured(), m => { m.bluetooth = { ...m.bluetooth, entries: [] }; })],
   ['readback-unavailable-valid.json', 'radio.readback', 'ACCEPT', null, null,
     'An interface that could not be read stays unavailable and names why.',
     variant(readbackMeasured(), m => { m.cells = { availability: 'UNAVAILABLE', reason: 'PERMISSION_DENIED', entries: null }; })],
-  ['readback-out-of-scope-valid.json', 'radio.readback', 'ACCEPT', null, null,
-    'An interface outside the declared plugin scope is neither a match nor a mismatch.',
-    variant(readbackMeasured(), m => { m.bluetooth = { availability: 'OUT_OF_SCOPE', reason: 'Plugin injects into target packages only; system Bluetooth stack is not covered', entries: null }; })],
+  ['readback-no-modem-valid.json', 'radio.readback', 'ACCEPT', null, null,
+    'An image with no modem makes cellular readback unavailable however well injection works.',
+    variant(readbackMeasured(), m => { m.cells = { availability: 'UNAVAILABLE', reason: 'NO_MODEM', entries: null }; })],
+  ['readback-not-yet-measured-valid.json', 'radio.readback', 'ACCEPT', null, null,
+    'Wi-Fi scan throttling leaves no post-application scan yet. Not measured is not unavailable.',
+    variant(readbackMeasured(), m => {
+      m.wifiScanThrottleDisabled = false;
+      m.wifi = { availability: 'NOT_YET_MEASURED', reason: 'SCAN_THROTTLED', entries: null };
+    })],
+  ['readback-unsupported-in-scope-valid.json', 'radio.readback', 'ACCEPT', null, null,
+    'An interface this build does not hook inside the injected packages is neither match nor mismatch.',
+    variant(readbackMeasured(), m => { m.bluetooth = { availability: 'UNSUPPORTED_IN_SCOPE', reason: 'This build hooks no Bluetooth API inside the pattern packages', entries: null }; })],
+  ['readback-out-of-scope-observer-valid.json', 'radio.readback', 'ACCEPT', null, null,
+    'The negative control: a package outside the pattern reports the host\'s real radios.',
+    readbackOutOfScope()],
+  ['readback-scope-unknown-valid.json', 'radio.readback', 'ACCEPT', null, null,
+    'An observer whose scope membership was not resolved supports no coverage claim either way.',
+    variant(readbackMeasured(), m => { m.scopeMembership = 'UNKNOWN'; })],
   ['readback-additive-mode-valid.json', 'radio.readback', 'ACCEPT', null, null,
     'An additive observer sees real networks alongside injected ones; extras are expected there.',
     variant(readbackMeasured(), m => {
       m.wifi.measurementMode = 'ADDITIVE';
       m.wifi.entries.push({ bssid: 'ff:ee:dd:00:00:01', ssid: 'NeighbourNet', frequencyMHz: 2437, rssiDbm: -83, measuredAtBootUs: 963300000 });
     })],
+  ['readback-live-scan-valid.json', 'radio.readback', 'ACCEPT', null, null,
+    'Collection method is recorded per interface: a hooked read and a real scan are different evidence.',
+    variant(readbackMeasured(), m => { m.wifi.collectionMethod = 'LIVE_SCAN'; })],
   ['readback-unavailable-with-entries.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
     'Unavailable cannot carry measurements.',
     variant(readbackMeasured(), m => { m.cells = { availability: 'UNAVAILABLE', reason: 'READ_FAILED', entries: [] }; })],
   ['readback-unknown-availability.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
-    'Availability is exactly MEASURED, UNAVAILABLE or OUT_OF_SCOPE.',
+    'Availability is exactly MEASURED, NOT_YET_MEASURED, UNAVAILABLE or UNSUPPORTED_IN_SCOPE.',
     variant(readbackMeasured(), m => { m.wifi = { availability: 'PARTIAL', entries: [] }; })],
+  ['readback-missing-collection-method.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'A measured interface must say which API produced the value and whether it was live or cached.',
+    variant(readbackMeasured(), m => { delete m.wifi.collectionMethod; })],
   ['readback-wrong-scope.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
     'Only an Android API readback counts; a provider acknowledgment does not.',
     variant(readbackMeasured(), m => { m.scope = 'PLUGIN_ACK'; })],
+  ['readback-rf-evidence-claim.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'A readback establishes injection fidelity. It cannot relabel itself as physical RF measurement.',
+    variant(readbackMeasured(), m => { m.evidenceClass = 'PHYSICAL_RF'; })],
   ['readback-missing-observer.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
     'The observing package and process are mandatory, so an echo of the request is identifiable.',
     variant(readbackMeasured(), m => { delete m.observerPackage; })],
+  ['readback-missing-scope-membership.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'Whether the observer sits inside the injected packages decides what its report can mean.',
+    variant(readbackMeasured(), m => { delete m.scopeMembership; })],
+  ['readback-self-observation.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', 'SELF_OBSERVATION',
+    'The applying process cannot be its own observer; that is the weakness the current player has.',
+    variant(readbackMeasured(), m => { m.observerProcess = INSTANCE; })],
+  ['readback-privileged-identifier.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'IMEI, IMSI and ICCID are privileged since Android 10 and are never part of a comparison.',
+    variant(readbackMeasured(), m => { m.imsi = '310260123456789'; })],
   ['readback-observed-before-applied.json', 'radio.readback', 'REJECT', 'MALFORMED_MESSAGE', 'CLOCK_ORDER',
     'An observation cannot precede the application it verifies.',
     variant(readbackMeasured(), m => { m.observedAtBootMs = 963000; })],
@@ -365,49 +465,82 @@ const cases = [
     variant(readbackMeasured(), m => { m.wifi.entries[0].measuredAtBootUs = 999000000; })],
 
   // --- radio.capabilities: A02 -----------------------------------------------------
-  ['capabilities-target-packages-valid.json', 'radio.capabilities', 'ACCEPT', null, null,
-    'Package-targeted injection, which is what the DuoPlus plugin documentation describes.',
+  ['capabilities-package-pattern-valid.json', 'radio.capabilities', 'ACCEPT', null, null,
+    'Three artifacts and a package pattern: the scope Android and the DuoPlus module framework actually allow.',
     capabilities()],
   ['capabilities-unsupported-interface-valid.json', 'radio.capabilities', 'ACCEPT', null, null,
-    'An unsupported interface is declared explicitly rather than omitted.',
-    variant(capabilities(), m => { m.interfaces.bluetooth = { supported: false, reason: 'No Bluetooth injection API in this build' }; })],
-  ['capabilities-device-wide-valid.json', 'radio.capabilities', 'ACCEPT', null, null,
-    'A device-wide claim is allowed only with observer evidence from a package the plugin does not own.',
+    'An unsupported interface is declared explicitly, with the cause distinguishing build from image.',
+    variant(capabilities(), m => { m.interfaces.bluetooth = { supported: false, reason: 'No Bluetooth injection API in this build', cause: 'NOT_IMPLEMENTED' }; })],
+  ['capabilities-no-modem-valid.json', 'radio.capabilities', 'ACCEPT', null, null,
+    'An image with no modem declares cellular unsupported with the image as the cause.',
     variant(capabilities(), m => {
-      m.injectionScope = 'DEVICE_WIDE'; m.targetPackages = [];
-      m.deviceWideEvidence = { observerPackage: 'net.stakeout.probe', observerProcess: 'net.stakeout.probe', verifiedAtWallMs: 1789699000000 };
+      m.imagePrerequisites.modemPresent = false;
+      m.interfaces.cells = { supported: false, reason: 'This image reports no modem; getAllCellInfo returns empty', cause: 'IMAGE_LACKS_HARDWARE' };
     })],
-  ['capabilities-device-wide-unproven.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', 'SCOPE_UNPROVEN',
-    'Device-wide coverage cannot be asserted from one successful in-app callback.',
-    variant(capabilities(), m => { m.injectionScope = 'DEVICE_WIDE'; m.targetPackages = []; })],
-  ['capabilities-target-packages-empty.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', 'SCOPE_UNDECLARED',
-    'Package-targeted scope must enumerate its packages.',
-    variant(capabilities(), m => { m.targetPackages = []; })],
+  ['capabilities-system-scope-valid.json', 'radio.capabilities', 'ACCEPT', null, null,
+    'Scope beyond the pattern requires a system module and observer evidence from outside it.',
+    variant(capabilities(), m => {
+      m.injectionScope = 'SYSTEM_MODULE'; m.artifacts.module.moduleType = 'system';
+      m.systemScopeEvidence = { observerPackage: 'net.stakeout.duomove.outsider', observerProcess: 'net.stakeout.duomove.outsider', verifiedAtWallMs: 1789699000000 };
+    })],
+  ['capabilities-system-scope-unproven.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', 'SCOPE_UNPROVEN',
+    'Coverage beyond the injected packages cannot be asserted from one successful in-app callback.',
+    variant(capabilities(), m => { m.injectionScope = 'SYSTEM_MODULE'; })],
+  ['capabilities-empty-pattern.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', 'SCOPE_UNDECLARED',
+    'The supported scope is a package list, so it cannot be empty.',
+    variant(capabilities(), m => { m.pattern = []; })],
+  ['capabilities-scope-fingerprint-mismatch.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', 'SCOPE_FINGERPRINT_MISMATCH',
+    'The fingerprint frames are bound to must be derivable from the declared pattern.',
+    variant(capabilities(), m => { m.pattern = [...PATTERN, 'com.example.extra']; })],
+  ['capabilities-cells-without-modem.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', 'PREREQUISITE_CONFLICT',
+    'Cellular cannot be declared supported on an image probed as having no modem.',
+    variant(capabilities(), m => { m.imagePrerequisites.modemPresent = false; })],
+  ['capabilities-missing-signer.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'The signing certificate digest is what distinguishes an in-place update from a rebuild under a new key.',
+    variant(capabilities(), m => { delete m.artifacts.agent.signerCertSha256; })],
+  ['capabilities-single-artifact.json', 'radio.capabilities', 'REJECT', 'MALFORMED_MESSAGE', null,
+    'Applier module and control agent are separate artifacts with separate identities.',
+    variant(capabilities(), m => { delete m.artifacts.module; })],
 
   // --- session lifecycle -----------------------------------------------------------
   ['session-open-valid.json', 'radio.session.open', 'ACCEPT', null, null,
-    'The controller opens a session against an expected build; boot identity comes back from the phone.',
+    'The controller opens a session against expected artifacts and scope; boot and agent identity come back from the phone.',
     {
       ...envelope('radio.session.open', 80),
       identity: { tenantId: identity.tenantId, imageId: identity.imageId, sessionId: SESSION, datasetRevision: identity.datasetRevision },
-      expectedCapabilities: { apkSha256: APK_SHA, pluginVersionCode: 1 },
+      expectedArtifacts: { agentApkSha256: AGENT_SHA, agentVersionCode: 1, moduleApkSha256: MODULE_SHA, moduleName: 'duomove-radio' },
+      expectedScopeFingerprint: SCOPE,
       simStartWallMs: 1789699999000,
     }],
   ['session-opened-valid.json', 'radio.session.opened', 'ACCEPT', null, null,
-    'The only sanctioned bridge between simulation time and phone boot time.',
+    'The only sanctioned bridge between simulation time and phone boot time, plus the dataset pin.',
     {
       ...envelope('radio.session.opened', 81),
       identity,
-      clockAnchor: { bootId: BOOT, simElapsedMs: 0, phoneBootMs: 918100, wallMs: 1789699999120, uncertaintyMs: 120 },
+      clockAnchor: { bootId: BOOT, bootCount: 41, bootIdSource: 'BOOT_COUNT_UUID', simElapsedMs: 0, phoneBootMs: 918100, wallMs: 1789699999120, uncertaintyMs: 120 },
       capabilitiesMessageId: messageId(60),
+      scopeFingerprint: SCOPE,
+      datasetRevisionPinned: true,
     }],
   ['session-opened-foreign-anchor.json', 'radio.session.opened', 'REJECT', 'MALFORMED_MESSAGE', 'BOOT_MISMATCH',
     'A clock anchor from another boot would let a pre-reboot frame look fresh.',
     {
       ...envelope('radio.session.opened', 82),
       identity,
-      clockAnchor: { bootId: 'boot-earlier-4410', simElapsedMs: 0, phoneBootMs: 918100, wallMs: 1789699999120, uncertaintyMs: 120 },
+      clockAnchor: { bootId: 'boot-4410-earlier', bootCount: 40, bootIdSource: 'BOOT_COUNT_UUID', simElapsedMs: 0, phoneBootMs: 918100, wallMs: 1789699999120, uncertaintyMs: 120 },
       capabilitiesMessageId: messageId(60),
+      scopeFingerprint: SCOPE,
+      datasetRevisionPinned: true,
+    }],
+  ['session-opened-unpinned-dataset.json', 'radio.session.opened', 'REJECT', 'MALFORMED_MESSAGE', 'DATASET_UNPINNED',
+    'Bounded spatial loading means a run must be pinned to the dataset revision it was planned against.',
+    {
+      ...envelope('radio.session.opened', 87),
+      identity,
+      clockAnchor: { bootId: BOOT, bootCount: 41, bootIdSource: 'BOOT_COUNT_UUID', simElapsedMs: 0, phoneBootMs: 918100, wallMs: 1789699999120, uncertaintyMs: 120 },
+      capabilitiesMessageId: messageId(60),
+      scopeFingerprint: SCOPE,
+      datasetRevisionPinned: false,
     }],
   ['session-closed-valid.json', 'radio.session.closed', 'ACCEPT', null, null,
     'Cleanup confirmed, with nothing left injected.',

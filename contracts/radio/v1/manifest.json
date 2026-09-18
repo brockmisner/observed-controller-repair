@@ -128,6 +128,22 @@
       "why": "Boot identity is mandatory; without it a pre-reboot frame could be applied after a restart."
     },
     {
+      "file": "fixtures/apply-missing-instance-id.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Agent process identity is separate from boot identity and equally mandatory."
+    },
+    {
+      "file": "fixtures/apply-missing-scope-fingerprint.json",
+      "messageType": "radio.apply",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Every frame states the injected package scope it was computed for."
+    },
+    {
       "file": "fixtures/apply-unknown-field.json",
       "messageType": "radio.apply",
       "expect": "REJECT",
@@ -222,6 +238,14 @@
       "code": null,
       "detail": null,
       "why": "Partial failure names exactly which interface did not reach its instructed state."
+    },
+    {
+      "file": "fixtures/result-cells-unavailable-valid.json",
+      "messageType": "radio.result",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Unavailable on this image is a different outcome from unsupported by this build."
     },
     {
       "file": "fixtures/result-expired-valid.json",
@@ -360,12 +384,44 @@
       "why": "An interface that could not be read stays unavailable and names why."
     },
     {
-      "file": "fixtures/readback-out-of-scope-valid.json",
+      "file": "fixtures/readback-no-modem-valid.json",
       "messageType": "radio.readback",
       "expect": "ACCEPT",
       "code": null,
       "detail": null,
-      "why": "An interface outside the declared plugin scope is neither a match nor a mismatch."
+      "why": "An image with no modem makes cellular readback unavailable however well injection works."
+    },
+    {
+      "file": "fixtures/readback-not-yet-measured-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Wi-Fi scan throttling leaves no post-application scan yet. Not measured is not unavailable."
+    },
+    {
+      "file": "fixtures/readback-unsupported-in-scope-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An interface this build does not hook inside the injected packages is neither match nor mismatch."
+    },
+    {
+      "file": "fixtures/readback-out-of-scope-observer-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "The negative control: a package outside the pattern reports the host's real radios."
+    },
+    {
+      "file": "fixtures/readback-scope-unknown-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "An observer whose scope membership was not resolved supports no coverage claim either way."
     },
     {
       "file": "fixtures/readback-additive-mode-valid.json",
@@ -374,6 +430,14 @@
       "code": null,
       "detail": null,
       "why": "An additive observer sees real networks alongside injected ones; extras are expected there."
+    },
+    {
+      "file": "fixtures/readback-live-scan-valid.json",
+      "messageType": "radio.readback",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Collection method is recorded per interface: a hooked read and a real scan are different evidence."
     },
     {
       "file": "fixtures/readback-unavailable-with-entries.json",
@@ -389,7 +453,15 @@
       "expect": "REJECT",
       "code": "MALFORMED_MESSAGE",
       "detail": null,
-      "why": "Availability is exactly MEASURED, UNAVAILABLE or OUT_OF_SCOPE."
+      "why": "Availability is exactly MEASURED, NOT_YET_MEASURED, UNAVAILABLE or UNSUPPORTED_IN_SCOPE."
+    },
+    {
+      "file": "fixtures/readback-missing-collection-method.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "A measured interface must say which API produced the value and whether it was live or cached."
     },
     {
       "file": "fixtures/readback-wrong-scope.json",
@@ -400,12 +472,44 @@
       "why": "Only an Android API readback counts; a provider acknowledgment does not."
     },
     {
+      "file": "fixtures/readback-rf-evidence-claim.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "A readback establishes injection fidelity. It cannot relabel itself as physical RF measurement."
+    },
+    {
       "file": "fixtures/readback-missing-observer.json",
       "messageType": "radio.readback",
       "expect": "REJECT",
       "code": "MALFORMED_MESSAGE",
       "detail": null,
       "why": "The observing package and process are mandatory, so an echo of the request is identifiable."
+    },
+    {
+      "file": "fixtures/readback-missing-scope-membership.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Whether the observer sits inside the injected packages decides what its report can mean."
+    },
+    {
+      "file": "fixtures/readback-self-observation.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SELF_OBSERVATION",
+      "why": "The applying process cannot be its own observer; that is the weakness the current player has."
+    },
+    {
+      "file": "fixtures/readback-privileged-identifier.json",
+      "messageType": "radio.readback",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "IMEI, IMSI and ICCID are privileged since Android 10 and are never part of a comparison."
     },
     {
       "file": "fixtures/readback-observed-before-applied.json",
@@ -424,12 +528,12 @@
       "why": "A scan result cannot be dated after the report carrying it."
     },
     {
-      "file": "fixtures/capabilities-target-packages-valid.json",
+      "file": "fixtures/capabilities-package-pattern-valid.json",
       "messageType": "radio.capabilities",
       "expect": "ACCEPT",
       "code": null,
       "detail": null,
-      "why": "Package-targeted injection, which is what the DuoPlus plugin documentation describes."
+      "why": "Three artifacts and a package pattern: the scope Android and the DuoPlus module framework actually allow."
     },
     {
       "file": "fixtures/capabilities-unsupported-interface-valid.json",
@@ -437,31 +541,71 @@
       "expect": "ACCEPT",
       "code": null,
       "detail": null,
-      "why": "An unsupported interface is declared explicitly rather than omitted."
+      "why": "An unsupported interface is declared explicitly, with the cause distinguishing build from image."
     },
     {
-      "file": "fixtures/capabilities-device-wide-valid.json",
+      "file": "fixtures/capabilities-no-modem-valid.json",
       "messageType": "radio.capabilities",
       "expect": "ACCEPT",
       "code": null,
       "detail": null,
-      "why": "A device-wide claim is allowed only with observer evidence from a package the plugin does not own."
+      "why": "An image with no modem declares cellular unsupported with the image as the cause."
     },
     {
-      "file": "fixtures/capabilities-device-wide-unproven.json",
+      "file": "fixtures/capabilities-system-scope-valid.json",
+      "messageType": "radio.capabilities",
+      "expect": "ACCEPT",
+      "code": null,
+      "detail": null,
+      "why": "Scope beyond the pattern requires a system module and observer evidence from outside it."
+    },
+    {
+      "file": "fixtures/capabilities-system-scope-unproven.json",
       "messageType": "radio.capabilities",
       "expect": "REJECT",
       "code": "MALFORMED_MESSAGE",
       "detail": "SCOPE_UNPROVEN",
-      "why": "Device-wide coverage cannot be asserted from one successful in-app callback."
+      "why": "Coverage beyond the injected packages cannot be asserted from one successful in-app callback."
     },
     {
-      "file": "fixtures/capabilities-target-packages-empty.json",
+      "file": "fixtures/capabilities-empty-pattern.json",
       "messageType": "radio.capabilities",
       "expect": "REJECT",
       "code": "MALFORMED_MESSAGE",
       "detail": "SCOPE_UNDECLARED",
-      "why": "Package-targeted scope must enumerate its packages."
+      "why": "The supported scope is a package list, so it cannot be empty."
+    },
+    {
+      "file": "fixtures/capabilities-scope-fingerprint-mismatch.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "SCOPE_FINGERPRINT_MISMATCH",
+      "why": "The fingerprint frames are bound to must be derivable from the declared pattern."
+    },
+    {
+      "file": "fixtures/capabilities-cells-without-modem.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "PREREQUISITE_CONFLICT",
+      "why": "Cellular cannot be declared supported on an image probed as having no modem."
+    },
+    {
+      "file": "fixtures/capabilities-missing-signer.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "The signing certificate digest is what distinguishes an in-place update from a rebuild under a new key."
+    },
+    {
+      "file": "fixtures/capabilities-single-artifact.json",
+      "messageType": "radio.capabilities",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": null,
+      "why": "Applier module and control agent are separate artifacts with separate identities."
     },
     {
       "file": "fixtures/session-open-valid.json",
@@ -469,7 +613,7 @@
       "expect": "ACCEPT",
       "code": null,
       "detail": null,
-      "why": "The controller opens a session against an expected build; boot identity comes back from the phone."
+      "why": "The controller opens a session against expected artifacts and scope; boot and agent identity come back from the phone."
     },
     {
       "file": "fixtures/session-opened-valid.json",
@@ -477,7 +621,7 @@
       "expect": "ACCEPT",
       "code": null,
       "detail": null,
-      "why": "The only sanctioned bridge between simulation time and phone boot time."
+      "why": "The only sanctioned bridge between simulation time and phone boot time, plus the dataset pin."
     },
     {
       "file": "fixtures/session-opened-foreign-anchor.json",
@@ -486,6 +630,14 @@
       "code": "MALFORMED_MESSAGE",
       "detail": "BOOT_MISMATCH",
       "why": "A clock anchor from another boot would let a pre-reboot frame look fresh."
+    },
+    {
+      "file": "fixtures/session-opened-unpinned-dataset.json",
+      "messageType": "radio.session.opened",
+      "expect": "REJECT",
+      "code": "MALFORMED_MESSAGE",
+      "detail": "DATASET_UNPINNED",
+      "why": "Bounded spatial loading means a run must be pinned to the dataset revision it was planned against."
     },
     {
       "file": "fixtures/session-closed-valid.json",
