@@ -410,6 +410,7 @@ function renderFleet(snap) {
         <small>${escapeHtml(d.imageId)} · ${escapeHtml(folderLabel(d))}</small>
         ${importIssueHtml(d.imageId)}
         <div class="fleet-subline">${statusHtml(deviceStatus("wifi", d))}<small>Checked ${age(d.lastPowerSyncAt)}</small></div>
+        ${d.radioLive?.operator ? `<div class="fleet-subline">${statusHtml(d.radioLive.operator)}<small>${escapeHtml(d.radioLive.readiness?.code || "Radio")}</small></div>` : ""}
       </button>
     `)
     .join("");
@@ -679,6 +680,7 @@ function renderDetail() {
     <div class="meta">${escapeHtml(location.reason)}</div>
     <dl class="environment-fields"><dt>Model updated</dt><dd>${age(d.lastTickAt)}</dd><dt>Campaign remaining</dt><dd>${daysLeft(d.campaignEnd).toFixed(1)} days</dd></dl>
     ${gpsEvidenceHtml(d)}
+    <div id="radioLiveStatus">${window.ObservatoryRadioStatus?.markup(d.radioLive) || ""}</div>
     <div class="section-heading"><h3>Legacy automation</h3><button type="button" class="btn ghost" id="manageRpaJobs">Review jobs</button></div>
     <div class="section-heading"><h3>Source boundaries</h3></div><dl class="environment-fields"><dt>WiGLE</dt><dd>Historical observations</dd><dt>SIM / cell / Bluetooth</dt><dd>Local metadata; not verified on device</dd><dt>Network / DNS</dt><dd>Not verified</dd></dl>
     <div class="section-heading"><h3>Device profile</h3></div><dl class="environment-fields"><dt>Proxy source</dt><dd>Stored proxy lookup; not measured device egress</dd><dt>Proxy IP</dt><dd>${escapeHtml(d.proxyIp || "Unknown")}</dd><dt>Proxy ISP</dt><dd>${escapeHtml(d.proxyIsp || "Unknown")}</dd><dt>Proxy ASN</dt><dd>${escapeHtml(d.proxyAsn || "Unknown")}</dd><dt>Proxy lookup time</dt><dd>Unavailable</dd><dt>SIM source</dt><dd>DuoPlus /info at preview</dd><dt>Preview MCC / MNC</dt><dd>${escapeHtml(d.environment?.profile?.sim?.mcc || "Unknown")} / ${escapeHtml(d.environment?.profile?.sim?.mnc || "Unknown")}</dd><dt>SIM preview time</dt><dd>${environmentTime(d.environment?.preparedAt)}</dd></dl>

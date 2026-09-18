@@ -9,7 +9,8 @@ import { HttpError } from '../http/errors.js';
 import { savedFolders } from '../orchestrator/folders.js';
 import { haversineMeters } from '../geo/haversine.js';
 import { parseObservedWifi,rankObservedWifi } from '../env/environmentData.js';
-import { campaignSchema,citySchema,radioSchema,liveCampaignStates,busyRunStates,remoteRunStates,dailyPlan,dayNumber,localParts,expectedTaskCount,type Task } from './model.js';
+import { campaignSchema,citySchema,radioSchema,liveCampaignStates,busyRunStates,dailyPlan,dayNumber,localParts,expectedTaskCount } from './model.js';
+import { encodeCampaignSchedule, parseScheduleItems } from './movement.js';
 
 export const warmupServiceIo = { withTripLease };
 
@@ -63,13 +64,13 @@ export async function campaignCreate(tenantId:string,raw:unknown) {
  if(input.startDate<localParts(new Date(),input.timezone).date)throw new HttpError(400,'Start date must be today or later');
  if(!expectedTaskCount(input.durationDays,input.schedule))throw new HttpError(400,'No tasks fall within this campaign');
  if(input.folderId&&!folders?.phones.find(p=>p.imageId===device.imageId)?.groups?.some(f=>f.id===input.folderId))throw new HttpError(409,'Phone is not in that DuoPlus folder; sync the fleet or choose its current folder');
- const {schedule,...values}=input;
+ const {schedule,movement,...values}=input;
  return warmupServiceIo.withTripLease(device.id,tenantId,async lease=>{
  await lease.assertOwned();
  return prisma.$transaction(async tx=>{
   await assertNoWarmup(device.id,tx);
   await assertCampaignPhoneAvailable(device.id,device.imageId,tx);
-  const row=await tx.warmupCampaign.create({data:{...values,tenantId,imageId:device.imageId,reservedImageId:device.imageId,scheduleJson:JSON.stringify(schedule)}});
+  const row=await tx.warmupCampaign.create({data:{...values,tenantId,imageId:device.imageId,reservedImageId:device.imageId,scheduleJson:encodeCampaignSchedule(schedule,movement)}});
   await tx.warmupEvent.create({data:{campaignId:row.id,kind:'CREATED',detail:'Existing DuoPlus image reserved; profile and app data retained.'}});
   return row;
  });
@@ -82,7 +83,7 @@ export async function materializeDays(id:string,now=new Date()) {
  const latest=await prisma.warmupRun.aggregate({where:{campaignId:id},_max:{dayNumber:true}});
  const from=Math.max(1,latest._max.dayNumber??1),to=Math.min(c.durationDays,today+7);
  const existing=new Set((await prisma.warmupRun.findMany({where:{campaignId:id,dayNumber:{gte:from,lte:to}},select:{dayNumber:true,slotKey:true}})).map(r=>`${r.dayNumber}:${r.slotKey}`));
- for(const item of dailyPlan(c.startDate,c.durationDays,c.timezone,JSON.parse(c.scheduleJson),from,to)) {
+ for(const item of dailyPlan(c.startDate,c.durationDays,c.timezone,parseScheduleItems(c.scheduleJson),from,to)) {
   if(existing.has(`${item.dayNumber}:${item.slotKey}`))continue;
   const runId=randomUUID();
   await prisma.warmupRun.upsert({where:{campaignId_dayNumber_slotKey:{campaignId:id,dayNumber:item.dayNumber,slotKey:item.slotKey}},update:{},create:{id:runId,campaignId:id,dayNumber:item.dayNumber,slotKey:item.slotKey,scheduledAt:item.scheduledAt,deadlineAt:item.deadlineAt,taskJson:JSON.stringify(item.task),providerName:`warmup-${runId}`,status:item.deadlineAt<=now?'MISSED':'WAITING',...(item.deadlineAt<=now?{completedAt:now,error:'Daily window passed before execution'}:{})}});
@@ -146,9 +147,9 @@ export async function warmupView(tenantId:string) {
   campaigns:await Promise.all(campaigns.map(async c=>{
    const counts=await prisma.warmupRun.groupBy({by:['status'],where:{campaignId:c.id},_count:true});
    const summary=Object.fromEntries(counts.map(r=>[r.status,r._count]));
-   const expected=expectedTaskCount(c.durationDays,JSON.parse(c.scheduleJson));
+   const expected=expectedTaskCount(c.durationDays,parseScheduleItems(c.scheduleJson));
    const next=await prisma.warmupRun.findFirst({where:{campaignId:c.id,status:'WAITING'},orderBy:{scheduledAt:'asc'},select:{scheduledAt:true}});
-   return {...c,schedule:JSON.parse(c.scheduleJson),scheduleJson:undefined,profileBaselineJson:undefined,environmentJson:undefined,environment:c.environmentJson?JSON.parse(c.environmentJson):null,day:Math.min(c.durationDays,Math.max(0,dayNumber(c.startDate,localParts(new Date(),c.timezone).date))),expectedTasks:expected,counts:summary,progress:expected?Math.round(100*(summary.SUCCEEDED??0)/expected):0,nextAt:next?.scheduledAt??null,profilePolicy:'PRESERVE_EXISTING_IMAGE'};
+   return {...c,schedule:parseScheduleItems(c.scheduleJson),scheduleJson:undefined,profileBaselineJson:undefined,environmentJson:undefined,environment:c.environmentJson?JSON.parse(c.environmentJson):null,day:Math.min(c.durationDays,Math.max(0,dayNumber(c.startDate,localParts(new Date(),c.timezone).date))),expectedTasks:expected,counts:summary,progress:expected?Math.round(100*(summary.SUCCEEDED??0)/expected):0,nextAt:next?.scheduledAt??null,profilePolicy:'PRESERVE_EXISTING_IMAGE'};
   })),devices,folders,uploads,capabilities:{wifi:'Provider profile readback',cell:'Reference records only',bluetooth:'Reference records only',profile:'Existing app data and cookies remain on the same DuoPlus image. External template behavior is operator-controlled.'}};
 }
 export async function campaignHistory(tenantId:string,id:string) {
