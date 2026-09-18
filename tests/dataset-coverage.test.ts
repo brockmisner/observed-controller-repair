@@ -95,6 +95,9 @@ test("WiGLE responses are classified, including the daily-limit refusal and an e
   const limited = classifyResponse(fixture("wigle-rate-limited.json"));
   assert.equal(limited.kind, "RATE_LIMITED");
   assert.match(limited.message ?? "", /too many queries/);
+  // The commercial-token refusal also means "cannot query now" and must pause rather than fail an ingest.
+  assert.equal(classifyResponse({ success: false, message: "Insufficient balance for commercial query" }).kind, "RATE_LIMITED");
+  assert.equal(classifyResponse({ success: false, message: "malformed search" }).kind, "ERROR");
   const empty = classifyResponse(fixture("wigle-empty.json"));
   assert.equal(empty.kind, "SEARCH");
   assert.equal(empty.empty, true);
