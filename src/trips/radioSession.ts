@@ -13,14 +13,11 @@ import {
  * Opening a session requires workspace authorization for the image and the physical-image lease
  * that GPS work already uses, so radio state can never be written by a second competing job.
  */
-export interface RadioSessionIdentity {
-  tenantId: string;
-  imageId: string;
-  sessionId: string;
-  instanceId: string;
-  bootId: string;
-  datasetRevision: string;
-}
+/**
+ * Module, agent, boot and session identity are separate concepts: the injecting `dplus` module,
+ * the agent APK process that owns the channel, the phone's boot and the controller's run.
+ */
+export type RadioSessionIdentity = RadioIdentity;
 
 export interface OpenRadioDeliveryOptions {
   identity: RadioSessionIdentity;

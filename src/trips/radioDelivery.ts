@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { previewRadioCodec, RadioWireError, type RadioIdentity, type RadioWireCodec } from './radioWire.js';
+import { randomBytes } from 'node:crypto';
+import { previewRadioCodec, RadioWireError, type RadioAck, type RadioIdentity, type RadioWireCodec } from './radioWire.js';
 import { RadioTransportError, type RadioTransport } from './radioTransport.js';
 import type { ImageOwnership } from './imageOwnership.js';
 
@@ -91,7 +91,7 @@ export class RadioDeliveryAdapter {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxPayloadBytes = options.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
     this.clock = options.clock ?? (() => new Date());
-    this.nextRequestId = options.requestId ?? (() => randomUUID());
+    this.nextRequestId = options.requestId ?? (() => randomBytes(16).toString('hex'));
   }
 
   get summary(): RadioDeliverySummary {
@@ -192,14 +192,20 @@ export class RadioDeliveryAdapter {
     return finish('REJECTED', ack.reason ?? 'The phone rejected this frame', observed);
   }
 
-  private identityMismatch(ack: { requestId: string; imageId: string; sessionId: string; instanceId: string; bootId: string; epoch: number; sequence: number },
-    requestId: string, sequence: number): string | null {
+  /**
+   * Module, agent, boot and session are checked as separate identities: new injecting code, a
+   * restarted receiver, a rebooted phone and a different run are different problems.
+   */
+  private identityMismatch(ack: RadioAck, requestId: string, sequence: number): string | null {
     const { identity, ownership } = this.options;
     if (ack.requestId !== requestId) return 'The acknowledgment answered a different request';
     if (ack.imageId !== identity.imageId) return 'The acknowledgment came from a different phone';
-    if (ack.sessionId !== identity.sessionId) return 'The acknowledgment belongs to a different radio session';
-    if (ack.instanceId !== identity.instanceId) return 'The acknowledgment came from a different player instance';
+    if (ack.moduleName !== identity.moduleName) return 'The acknowledgment came from a different injecting module';
+    if (ack.moduleVersion !== identity.moduleVersion) return 'The injecting module changed version during this session';
+    if (ack.agentPackage !== identity.agentPackage) return 'The acknowledgment came from a different radio agent package';
+    if (ack.agentInstanceId !== identity.agentInstanceId) return 'The radio agent restarted during this session';
     if (ack.bootId !== identity.bootId) return 'The acknowledgment came from a different phone boot';
+    if (ack.sessionId !== identity.sessionId) return 'The acknowledgment belongs to a different radio session';
     if (ack.epoch !== ownership.epoch) return 'The acknowledgment carries a different ownership epoch';
     if (ack.sequence !== sequence) return 'The acknowledgment answered a different frame sequence';
     return null;

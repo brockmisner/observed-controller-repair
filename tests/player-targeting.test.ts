@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { CREDENTIAL_PATTERN, provisionerFor } from '../src/trips/playerCredentials.js';
 import { parsePlayerTargets, playerImageIds, requirePlayerTarget, findPlayerTarget, usesPlayer,
   resetPlayerRegistry, PlayerTargetError, type PlayerTarget } from '../src/trips/playerTargets.js';
 import { PlayerGateway, type PlayerAdbDriver } from '../src/trips/playerConnection.js';
@@ -21,6 +25,35 @@ test('each image resolves its own endpoint and its own credential file', () => {
   assert.equal(new Set(credentials).size, 3);
   assert.equal(credentials.every((path) => path.startsWith('/app/data/player-credentials/') && !path.includes('..')), true);
   assert.equal(registry.problems.size, 0);
+
+  // The radio agent is a separate artifact on the same phone: own package, port and credential.
+  const target = registry.targets.get('phone-a')!;
+  assert.equal(target.playerPackage, 'net.stakeout.duomove.player');
+  assert.equal(target.credentialMode, 'RUN_AS');
+  assert.equal(target.radioAgent.packageName, 'net.stakeout.duomove.radioagent');
+  assert.equal(target.radioAgent.moduleName, 'duomove-radio');
+  assert.notEqual(target.radioAgent.port, target.controlPort);
+  assert.notEqual(target.radioAgent.credentialPath, target.credentialPath);
+  // A release-signed agent cannot be provisioned over run-as, so it is not the default.
+  assert.equal(target.radioAgent.credentialMode, 'OPERATOR_SUPPLIED');
+});
+
+test('radio agent settings are validated per image and never collide with the player channel', () => {
+  const agent = { packageName: 'net.example.agent', port: 9100, moduleName: 'duomove-radio-next', credentialMode: 'AGENT_MINTED' };
+  const configured = parsePlayerTargets(env({ DUOMOVE_PLAYER_TARGETS: JSON.stringify([{ ...phoneA, radioAgent: agent }]) }));
+  assert.deepEqual(configured.targets.get('phone-a')!.radioAgent, { ...agent,
+    credentialPath: configured.targets.get('phone-a')!.radioAgent.credentialPath });
+
+  for (const [broken, reason] of [
+    [{ radioAgent: { port: 9999 } }, /port is the player control port/],
+    [{ radioAgent: { packageName: 'not a package' } }, /agent package is invalid/],
+    [{ radioAgent: { credentialMode: 'RUN_AS_MAYBE' } }, /credential mode is invalid/],
+    [{ credentialMode: 'SOMEHOW' }, /Player credential mode is invalid/],
+  ] as [Record<string, unknown>, RegExp][]) {
+    const registry = parsePlayerTargets(env({ DUOMOVE_PLAYER_TARGETS: JSON.stringify([{ ...phoneA, ...broken }]) }));
+    assert.equal(registry.targets.has('phone-a'), false);
+    assert.match(registry.problems.get('phone-a') ?? '', reason);
+  }
 });
 
 test('a traversal or injection attempt in an image identifier never becomes a path or a target', () => {
@@ -114,16 +147,16 @@ function harness(phones: Map<string, FakePhone>, tokens: Map<string, string>, un
       return phone.port;
     },
     async removeForward(target) { record(target, 'removeForward'); },
-    async pushControlToken(target) { record(target, 'pushToken'); },
+    async pushControlToken(target, packageName) { record(target, `pushToken:${packageName}`); },
   };
   return { calls, gateway: new PlayerGateway({
     adb,
-    readCredential: async (target) => {
-      const token = tokens.get(target.imageId);
+    readCredential: async (slot) => {
+      const token = tokens.get(slot.imageId);
       if (!token) throw new Error('Player setup is incomplete');
       return token;
     },
-    writeCredential: async (target) => tokens.get(target.imageId) ?? 'unprovisioned',
+    provisionCredential: async (slot) => tokens.get(slot.imageId) ?? 'unprovisioned',
     connectSocket: (port, token) => PlayerSocket.connect(port, token),
   }) };
 }
@@ -269,6 +302,38 @@ test('a restarted player and a moved endpoint are reported, never absorbed', asy
     delete process.env.DUOMOVE_PLAYER_TARGETS;
     resetPlayerRegistry();
   }
+});
+
+test('credential provisioning is chosen per package, not assumed to be run-as', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'player-credentials-'));
+  try {
+    const pushed: { packageName: string; secret: string }[] = [];
+    const tools = { pushViaRunAs: async (packageName: string, secret: string) => { pushed.push({ packageName, secret }); } };
+    const slotFor = (mode: 'RUN_AS' | 'AGENT_MINTED' | 'OPERATOR_SUPPLIED', name: string) =>
+      ({ imageId: 'phone-a', packageName: `net.stakeout.duomove.${name}`, path: join(directory, `${name}.token`), mode } as const);
+
+    // The debuggable player: the controller mints the secret and pipes it in over run-as.
+    const player = slotFor('RUN_AS', 'player');
+    const minted = await provisionerFor('RUN_AS').provision(player, tools);
+    assert.match(minted, CREDENTIAL_PATTERN);
+    assert.deepEqual(pushed, [{ packageName: player.packageName, secret: minted }]);
+    assert.equal(await provisionerFor('RUN_AS').provision(player, tools), minted, 'an existing credential is reused');
+    const rotated = await provisionerFor('RUN_AS').provision(player, tools, { rotate: true });
+    assert.notEqual(rotated, minted);
+    assert.equal(pushed.at(-1)!.secret, rotated);
+
+    // A release-signed agent has no run-as path: nothing is pushed, and the gap is explicit.
+    const agent = slotFor('OPERATOR_SUPPLIED', 'radioagent');
+    await assert.rejects(provisionerFor('OPERATOR_SUPPLIED').provision(agent, tools), /Provision it on the phone/);
+    writeFileSync(agent.path, 'operator-supplied-token-aaaaaaaaaaaaaaaa');
+    assert.equal(await provisionerFor('OPERATOR_SUPPLIED').provision(agent, tools), 'operator-supplied-token-aaaaaaaaaaaaaaaa');
+    await assert.rejects(provisionerFor('OPERATOR_SUPPLIED').provision(agent, tools, { rotate: true }), /requires re-provisioning on the phone/);
+
+    // The agent's own disclosure interface does not exist yet, and is not invented here.
+    await assert.rejects(provisionerFor('AGENT_MINTED').provision(slotFor('AGENT_MINTED', 'radioagent2'), tools), /not delivered/);
+    assert.equal(pushed.every((entry) => entry.packageName === player.packageName), true,
+      'only the debuggable package is ever provisioned over run-as');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('an unconfigured or misconfigured phone reports why, without a usable target', async () => {

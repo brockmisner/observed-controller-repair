@@ -1,5 +1,5 @@
 import { createConnection, type Socket } from 'node:net';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { RadioWireCodec } from './radioWire.js';
 
 /**
@@ -122,7 +122,7 @@ export interface AuthenticatedRadioTransportOptions {
  * cannot reach a phone this controller is not authorized to drive.
  */
 export function createAuthenticatedRadioTransport(options: AuthenticatedRadioTransportOptions): RadioTransport {
-  const nextRequestId = options.requestId ?? (() => randomUUID());
+  const nextRequestId = options.requestId ?? (() => randomBytes(16).toString('hex'));
   const timeoutMs = options.handshakeTimeoutMs ?? 5000;
   return new LineRadioTransport({
     connect: options.connect,

@@ -1,8 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { PlayerSocket } from './playerProtocol.js';
 import { logger } from '../logger.js';
 import { readPhoneLocation, PHONE_LOCATION_COMMAND } from '../api/phoneNavigation.js';
@@ -10,11 +7,12 @@ import { installedPlayerInfo, playerApkPath, PLAYER_PACKAGE } from '../ops/playe
 import { playerImageIds, playerRegistry, requirePlayerTarget, findPlayerTarget, PlayerTargetError, type PlayerTarget } from './playerTargets.js';
 import { connectLoopback, createAuthenticatedRadioTransport, type RadioTransport } from './radioTransport.js';
 import { previewRadioCodec, type RadioWireCodec } from './radioWire.js';
+import { playerCredentialSlot, provisionerFor, radioAgentCredentialSlot, requireCredential,
+  type CredentialSlot, type CredentialTools } from './playerCredentials.js';
 
 export { playerImageIds, findPlayerTarget, requirePlayerTarget, PlayerTargetError, usesPlayer, playerTargetProblem, type PlayerTarget } from './playerTargets.js';
 
 const exec = promisify(execFile);
-const pkg = PLAYER_PACKAGE;
 
 /** Every device-side command is addressed to one image's own endpoint. Injectable for tests. */
 export interface PlayerAdbDriver {
@@ -23,7 +21,8 @@ export interface PlayerAdbDriver {
   shell(target: PlayerTarget, args: string[], timeoutMs?: number): Promise<string>;
   forward(target: PlayerTarget, devicePort: number): Promise<number>;
   removeForward(target: PlayerTarget, localPort: number): Promise<void>;
-  pushControlToken(target: PlayerTarget, token: string): Promise<void>;
+  /** Pipes a secret into one package's private files on stdin. Debuggable packages only. */
+  pushControlToken(target: PlayerTarget, packageName: string, token: string): Promise<void>;
 }
 
 async function adb(endpoint: string, args: string[], timeout = 12000): Promise<string> {
@@ -45,9 +44,9 @@ export const realAdbDriver: PlayerAdbDriver = {
   },
   async removeForward(target, localPort) { await adb(target.endpoint, ['forward', '--remove', `tcp:${localPort}`]); },
   // Fixed commands only. Token is passed on stdin into app-private storage, never in argv/logs.
-  pushControlToken(target, token) {
+  pushControlToken(target, packageName, token) {
     return new Promise<void>((resolve, reject) => {
-      const child = spawn('adb', ['-s', target.endpoint, 'shell', 'run-as', pkg, 'sh', '-c', "'umask 077; mkdir -p files; cat > files/control-token'"], { stdio: ['pipe', 'ignore', 'ignore'] });
+      const child = spawn('adb', ['-s', target.endpoint, 'shell', 'run-as', packageName, 'sh', '-c', "'umask 077; mkdir -p files; cat > files/control-token'"], { stdio: ['pipe', 'ignore', 'ignore'] });
       const timer = setTimeout(() => { child.kill(); reject(new Error('Player token setup timed out')); }, 12000);
       child.on('error', () => { clearTimeout(timer); reject(new Error('Player token setup failed')); });
       child.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('Player token setup failed')); });
@@ -58,23 +57,17 @@ export const realAdbDriver: PlayerAdbDriver = {
 
 export interface PlayerGatewayDeps {
   adb: PlayerAdbDriver;
-  readCredential(target: PlayerTarget): Promise<string>;
-  writeCredential(target: PlayerTarget): Promise<string>;
+  /** Reads an already-provisioned credential for one slot on one image. */
+  readCredential(slot: CredentialSlot): Promise<string>;
+  /** Provisions a slot through the mode that slot declares. */
+  provisionCredential(slot: CredentialSlot, tools: CredentialTools, options?: { rotate?: boolean }): Promise<string>;
   connectSocket(localPort: number, token: string): Promise<PlayerSocket>;
 }
 
 export const fileCredentials = {
-  async readCredential(target: PlayerTarget): Promise<string> {
-    const token = (await readFile(target.credentialPath, 'utf8')).trim();
-    if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error('Player setup is incomplete');
-    return token;
-  },
-  async writeCredential(target: PlayerTarget): Promise<string> {
-    await mkdir(dirname(target.credentialPath), { recursive: true, mode: 0o700 });
-    try { await writeFile(target.credentialPath, randomBytes(32).toString('base64url'), { mode: 0o600, flag: 'wx' }); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    return (await readFile(target.credentialPath, 'utf8')).trim();
-  },
+  readCredential: requireCredential,
+  provisionCredential: (slot: CredentialSlot, tools: CredentialTools, options?: { rotate?: boolean }) =>
+    provisionerFor(slot.mode).provision(slot, tools, options),
 };
 
 /**
@@ -103,7 +96,7 @@ export class PlayerGateway {
   async withPlayer<T>(imageId: string, work: (client: PlayerSocket, target: PlayerTarget) => Promise<T>): Promise<T> {
     const target = this.target(imageId);
     await this.connect(target);
-    const token = await this.deps.readCredential(target);
+    const token = await this.deps.readCredential(playerCredentialSlot(target));
     const port = await this.deps.adb.forward(target, target.controlPort);
     let client: PlayerSocket | undefined;
     try { client = await this.deps.connectSocket(port, token); return await work(client, target); }
@@ -114,12 +107,12 @@ export class PlayerGateway {
     return this.deps.adb.shell(target, args, timeoutMs);
   }
 
-  async apkInstalled(target: PlayerTarget): Promise<boolean> {
-    return (await this.deps.adb.shell(target, ['pm', 'path', pkg])).startsWith('package:');
+  async apkInstalled(target: PlayerTarget, packageName: string = target.playerPackage): Promise<boolean> {
+    return (await this.deps.adb.shell(target, ['pm', 'path', packageName])).startsWith('package:');
   }
 
-  async hasCredential(target: PlayerTarget): Promise<boolean> {
-    try { return Boolean(await this.deps.readCredential(target)); } catch { return false; }
+  async hasCredential(target: PlayerTarget, slot: CredentialSlot = playerCredentialSlot(target)): Promise<boolean> {
+    try { return Boolean(await this.deps.readCredential(slot)); } catch { return false; }
   }
 
   async observe(imageId: string) {
@@ -136,11 +129,11 @@ export class PlayerGateway {
   async openRadioTransport(imageId: string, codec: RadioWireCodec = previewRadioCodec): Promise<OpenRadioTransport> {
     const target = this.target(imageId);
     await this.connect(target);
-    const localPort = await this.deps.adb.forward(target, target.radioPort);
+    const localPort = await this.deps.adb.forward(target, target.radioAgent.port);
     const transport = createAuthenticatedRadioTransport({
       imageId, codec,
       connect: () => connectLoopback(localPort),
-      credential: () => this.deps.readCredential(target),
+      credential: () => this.deps.readCredential(radioAgentCredentialSlot(target)),
     });
     return {
       transport, target,
@@ -152,10 +145,12 @@ export class PlayerGateway {
   async initialize(imageId: string): Promise<void> {
     const target = this.target(imageId);
     await this.connect(target);
+    const pkg = target.playerPackage;
     if (!(await this.deps.adb.shell(target, ['pm', 'path', pkg])).startsWith('package:')) throw new Error('DuoMove Player is not installed');
-    const token = await this.deps.writeCredential(target);
     await this.deps.adb.shell(target, ['am', 'force-stop', pkg]);
-    await this.deps.adb.pushControlToken(target, token);
+    await this.deps.provisionCredential(playerCredentialSlot(target), {
+      pushViaRunAs: (packageName, secret) => this.deps.adb.pushControlToken(target, packageName, secret),
+    });
     for (const permission of ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION', 'POST_NOTIFICATIONS']) {
       await this.deps.adb.shell(target, ['pm', 'grant', pkg, `android.permission.${permission}`]);
     }
@@ -233,7 +228,7 @@ export interface PlayerInspection {
 export const players = new PlayerGateway({
   adb: realAdbDriver,
   readCredential: fileCredentials.readCredential,
-  writeCredential: fileCredentials.writeCredential,
+  provisionCredential: fileCredentials.provisionCredential,
   connectSocket: (port, token) => PlayerSocket.connect(port, token),
 });
 

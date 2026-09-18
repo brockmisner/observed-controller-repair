@@ -46,8 +46,15 @@ function fakeRedis() {
   return client;
 }
 
-function identityFor(imageId: string, sessionId: string, extra: Partial<{ instanceId: string; bootId: string }> = {}) {
-  return { tenantId: 'workspace-one', imageId, sessionId, instanceId: `player-${imageId}`, bootId: `boot-${imageId}`,
+const AGENT_PACKAGE = 'net.stakeout.duomove.radioagent';
+const MODULE_NAME = 'duomove-radio';
+const MODULE_VERSION = '0.1.0-stub';
+
+/** Module, agent, boot and session are distinct identities; each can change on its own. */
+function identityFor(imageId: string, sessionId: string,
+  extra: Partial<{ moduleName: string; moduleVersion: string; agentPackage: string; agentInstanceId: string; bootId: string }> = {}) {
+  return { tenantId: 'workspace-one', imageId, sessionId, moduleName: MODULE_NAME, moduleVersion: MODULE_VERSION,
+    agentPackage: AGENT_PACKAGE, agentInstanceId: `agent-${imageId}`, bootId: `boot-${imageId}`,
     datasetRevision: 'city:3', ...extra };
 }
 
@@ -62,7 +69,7 @@ function adapterFor(receiver: StubRadioReceiver, ownership: ImageOwnership, iden
 
 async function withReceiver<T>(imageId: string, run: (receiver: StubRadioReceiver) => Promise<T>,
   options: Partial<Parameters<typeof startStubRadioReceiver>[0]> = {}): Promise<T> {
-  const receiver = await startStubRadioReceiver({ imageId, token, instanceId: `player-${imageId}`, bootId: `boot-${imageId}`, ...options });
+  const receiver = await startStubRadioReceiver({ imageId, token, agentInstanceId: `agent-${imageId}`, bootId: `boot-${imageId}`, ...options });
   try { return await run(receiver); }
   finally { await receiver.close(); }
 }
@@ -111,23 +118,51 @@ test('a frame addressed to another phone is refused by the credential check and 
   });
 });
 
-test('an acknowledgment from a different player instance is a mismatch, not an application', async () => {
+test('a restarted agent is reported separately from changed injecting code or a rebooted phone', async () => {
+  const redis = fakeRedis();
+  const cases: [Partial<Parameters<typeof identityFor>[2]>, RegExp, Record<string, string>][] = [
+    [{ agentInstanceId: 'agent-before-restart' }, /radio agent restarted/, { agentInstanceId: 'agent-after-restart' }],
+    [{ moduleVersion: '0.0.9-stub' }, /module changed version/, {}],
+    [{ moduleName: 'duomove-radio-old' }, /different injecting module/, {}],
+    [{ bootId: 'boot-before-reboot' }, /different phone boot/, {}],
+  ];
+  for (const [expected, detail, receiverOptions] of cases) {
+    await withReceiver('phone-a', async (receiver) => {
+      await lease(redis, 'phone-a', async (ownership) => {
+        const { adapter, transport } = adapterFor(receiver, ownership, identityFor('phone-a', 'session-a', expected));
+        const result = await adapter.deliver(frame, { sequence: 1, elapsedMs: 1000 });
+        assert.equal(result.state, 'IDENTITY_MISMATCH');
+        assert.equal(result.applied, false);
+        assert.equal(result.uncertain, true);
+        assert.match(result.detail, detail);
+        // A writer that cannot identify its peer stops instead of continuing to send.
+        const next = await adapter.deliver(frame, { sequence: 2, elapsedMs: 2000 });
+        assert.equal(next.state, 'CLOSED');
+        assert.equal(next.sent, false);
+        transport.close();
+      });
+    }, receiverOptions);
+  }
+});
+
+test('the agent refuses a frame whose declared module or agent is not the one installed', async () => {
   const redis = fakeRedis();
   await withReceiver('phone-a', async (receiver) => {
     await lease(redis, 'phone-a', async (ownership) => {
-      const { adapter, transport } = adapterFor(receiver, ownership, identityFor('phone-a', 'session-a', { instanceId: 'player-before-restart' }));
-      const result = await adapter.deliver(frame, { sequence: 1, elapsedMs: 1000 });
-      assert.equal(result.state, 'IDENTITY_MISMATCH');
-      assert.equal(result.applied, false);
-      assert.equal(result.uncertain, true);
-      assert.match(result.detail, /different player instance/);
-      // A writer that cannot identify its peer stops instead of continuing to send.
-      const next = await adapter.deliver(frame, { sequence: 2, elapsedMs: 2000 });
-      assert.equal(next.state, 'CLOSED');
-      assert.equal(next.sent, false);
+      const transport = createAuthenticatedRadioTransport({ imageId: 'phone-a', codec: previewRadioCodec,
+        connect: () => connectLoopback(receiver.port), credential: async () => token });
+      const send = (identity: ReturnType<typeof identityFor>, sequence: number) => transport.send(previewRadioCodec.encodeApply({
+        identity, requestId: sequence.toString(16).padStart(32, '0'), epoch: ownership.epoch, sequence, elapsedMs: sequence * 1000, frame }), 1000);
+
+      const wrongModule = previewRadioCodec.decodeAck(await send(identityFor('phone-a', 'session-a', { moduleName: 'other-module' }), 1));
+      const wrongAgent = previewRadioCodec.decodeAck(await send(identityFor('phone-a', 'session-a', { agentPackage: 'com.example.other' }), 2));
       transport.close();
+
+      assert.equal(wrongModule.reason, 'unknown_module');
+      assert.equal(wrongAgent.reason, 'wrong_agent');
+      assert.equal(receiver.applied.length, 0);
     });
-  }, { instanceId: 'player-after-restart' });
+  });
 });
 
 test('a silent phone produces an explicit uncertain timeout rather than an assumed success', async () => {
@@ -239,14 +274,14 @@ test('an expired worker cannot overwrite the newer owner, in flight or on retry'
     const inFlight = createAuthenticatedRadioTransport({ imageId: 'phone-a', codec: previewRadioCodec,
       connect: () => connectLoopback(receiver.port), credential: async () => token });
     const raw = await inFlight.send(previewRadioCodec.encodeApply({ identity: identityFor('phone-a', 'session-expired'),
-      requestId: 'late-request', epoch: expired.epoch, sequence: 4, elapsedMs: 4000, frame: { ...frame, owner: 'expired' } }), 1000);
+      requestId: 'a'.repeat(32), epoch: expired.epoch, sequence: 4, elapsedMs: 4000, frame: { ...frame, owner: 'expired' } }), 1000);
     inFlight.close();
     expired.transport.close();
 
     const ack = previewRadioCodec.decodeAck(raw);
     assert.equal(ack.status, 'REJECTED');
-    assert.equal(ack.reason, 'STALE_EPOCH');
-    assert.deepEqual(receiver.rejections.map((entry) => entry.reason), ['STALE_EPOCH']);
+    assert.equal(ack.reason, 'stale_epoch');
+    assert.deepEqual(receiver.rejections.map((entry) => entry.reason), ['stale_epoch']);
     assert.deepEqual(receiver.applied.map((entry) => entry.sequence), [1, 2]);
     assert.equal((receiver.applied.at(-1)!.frame as { owner?: string }).owner, 'current');
   });
