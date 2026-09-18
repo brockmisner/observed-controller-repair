@@ -7,14 +7,15 @@ import { applyWarmupLocation, applyDeviceEnvironment, getDeviceStatus, triggerRp
 import { readDeviceWifi, normalizedMac, wifiReadbackMatches } from '../api/environmentWifi.js';
 import { readProviderGps } from '../api/providerGps.js';
 import { checkDevicePower } from '../orchestrator/powerCheck.js';
-import { haversineMeters } from '../geo/haversine.js';
 import { withTripLease } from '../trips/lease.js';
 import { assertNoPendingRpa } from '../queue/rpaOwnership.js';
 import { withEnvironmentWindow } from '../orchestrator/deviceOperations.js';
-import { busyRunStates,remoteRunStates,localParts,dayNumber,taskEvidence,providerTime,expectedTaskCount,type Task } from './model.js';
+import { busyRunStates,remoteRunStates,localParts,dayNumber,taskEvidence,providerTime,expectedTaskCount,isDriveSlot,type Task,type ScheduleItem } from './model.js';
 import { materializeDays,ownCampaign,selectCityWifi } from './service.js';
+import { atHome,campaignDriveEvidence,dependentDispatch,expandWarmupText,gpsPreflight,mayReleasePower,movementWindowOutcome,parseScheduleItems,resolveDriveDestination,warmupOwnerFromSync } from './movement.js';
+import { pauseCampaignDrive,readCampaignDrive,startCampaignDrive } from './campaignDrive.js';
 
-export const warmupIo = { withTripLease, checkDevicePower, warmupProvider, getDeviceStatus, applyWarmupLocation, applyDeviceEnvironment, triggerRpaTask };
+export const warmupIo = { withTripLease, checkDevicePower, warmupProvider, getDeviceStatus, applyWarmupLocation, applyDeviceEnvironment, triggerRpaTask, startCampaignDrive, pauseCampaignDrive, readCampaignDrive };
 export const runtime={lastTickAt:null as string|null,lastError:null as string|null};
 function safeError(e:unknown) {return e instanceof HttpError?e.message:'Provider or coordination check failed; retry deferred';}
 
@@ -38,13 +39,24 @@ export async function availableSlots(tenantId:string) {
 }
 async function campaignStillRuns(id:string,deviceId:string,imageId:string) {
  const c=await prisma.warmupCampaign.findUniqueOrThrow({where:{id},include:{device:true}});
- if(c.status!=='RUNNING'||c.deviceId!==deviceId||c.imageId!==imageId||c.device.imageId!==imageId||c.reservedImageId!==imageId||await prisma.device.count({where:{imageId,activeTripId:{not:null}}}))throw new HttpError(409,'Campaign paused or phone identity/ownership changed');
+ if(c.status!=='RUNNING'||c.deviceId!==deviceId||c.imageId!==imageId||c.device.imageId!==imageId||c.reservedImageId!==imageId)throw new HttpError(409,'Campaign paused or phone identity/ownership changed');
+ const busy=await prisma.device.findMany({where:{imageId,activeTripId:{not:null}},select:{activeTripId:true}});
+ for(const row of busy) {
+  const trip=row.activeTripId?await prisma.drivingTrip.findUnique({where:{id:row.activeTripId}}):null;
+  if(warmupOwnerFromSync(trip?.phoneSyncJson)?.campaignId!==id)throw new HttpError(409,'Campaign paused or phone identity/ownership changed');
+ }
  if(await prisma.site.count({where:{device:{imageId}}}))throw new HttpError(409,'A client assignment conflicts with this warmup phone');
  await assertNoPendingRpa(deviceId);
  return c;
 }
+async function movementIncomplete(campaignId:string,exceptRunId?:string) {
+ const rows=await prisma.warmupRun.findMany({where:{campaignId,id:exceptRunId?{not:exceptRunId}:undefined,OR:[{status:{in:['PREPARING','RUNNING','UNCONFIRMED']}},{status:'SUSPENDED_IN_PLACE'}]}});
+ return rows.some(row=>isDriveSlot(slotOf(row)));
+}
+function slotOf(run:{taskJson:string}):ScheduleItem { return JSON.parse(run.taskJson) as ScheduleItem; }
 async function reconcile(run:WarmupRun) {
  const c=await ownCampaign((await prisma.warmupCampaign.findUniqueOrThrow({where:{id:run.campaignId}})).tenantId,run.campaignId);
+ if(isDriveSlot(slotOf(run)))return reconcileMovement(run,c.tenantId);
  if(!run.issueAt||!run.submittedAt)return;
  const nextCheckAt=new Date(Date.now()+60000);
  try {
@@ -61,6 +73,45 @@ async function reconcile(run:WarmupRun) {
    await prisma.warmupRun.update({where:{id:run.id},data:{status:'UNCONFIRMED',nextCheckAt,error:'No unique matching task found in DuoPlus; automatic resubmission stopped'}});
    if(c.status==='RUNNING')await prisma.warmupCampaign.update({where:{id:c.id},data:{status:'NEEDS_ATTENTION',error:'Task submission needs review'}});
   } else await prisma.warmupRun.update({where:{id:run.id},data:{nextCheckAt}});
+ }catch(e){await prisma.warmupRun.update({where:{id:run.id},data:{nextCheckAt,error:safeError(e)}});}
+}
+async function missDependents(campaignId:string,dayNumber:number,slotKey:string,now:Date) {
+ const siblings=await prisma.warmupRun.findMany({where:{campaignId,dayNumber,status:'WAITING'}});
+ for(const row of siblings) {
+  const task=slotOf(row);
+  if(!isDriveSlot(task)&&task.dependsOn===slotKey) {
+   await prisma.warmupRun.updateMany({where:{id:row.id,status:'WAITING'},data:{status:'MISSED',completedAt:now,error:'Dependent movement did not arrive before the daily window ended; retained in history'}});
+  }
+ }
+}
+async function reconcileMovement(run:WarmupRun,tenantId:string) {
+ const nextCheckAt=new Date(Date.now()+5000);
+ const evidence=run.evidenceJson?JSON.parse(run.evidenceJson) as {tripId?:string;revision?:string}:{};
+ try {
+  if(!evidence.tripId) {
+   await prisma.warmupRun.update({where:{id:run.id},data:{nextCheckAt,error:'Campaign drive has no trip identity yet'}});
+   return;
+  }
+  const trip=await warmupIo.readCampaignDrive(tenantId,evidence.tripId);
+  const window=movementWindowOutcome({now:new Date(),deadlineAt:run.deadlineAt,tripStatus:trip.status});
+  if(window.action==='SUSPEND_IN_PLACE') {
+   if(['RUNNING','ARRIVING','PAUSED'].includes(trip.status)) {
+    await warmupIo.pauseCampaignDrive(tenantId,trip.id,trip.revision);
+   }
+   await prisma.warmupRun.update({where:{id:run.id},data:{status:window.status,completedAt:new Date(),error:window.code,evidenceJson:JSON.stringify(campaignDriveEvidence(trip,{code:window.code})),nextCheckAt:null}});
+   await missDependents(run.campaignId,run.dayNumber,run.slotKey,new Date());
+   return;
+  }
+  if(trip.status==='ARRIVED') {
+   await prisma.warmupRun.update({where:{id:run.id},data:{status:'SUCCEEDED',completedAt:new Date(),error:null,evidenceJson:JSON.stringify(campaignDriveEvidence(trip)),nextCheckAt:null}});
+   return;
+  }
+  if(['FAILED','CANCELLED'].includes(trip.status)) {
+   await prisma.warmupRun.update({where:{id:run.id},data:{status:'FAILED',completedAt:new Date(),error:`Campaign drive ${trip.status}`,evidenceJson:JSON.stringify(campaignDriveEvidence(trip)),nextCheckAt:null}});
+   await missDependents(run.campaignId,run.dayNumber,run.slotKey,new Date());
+   return;
+  }
+  await prisma.warmupRun.update({where:{id:run.id},data:{nextCheckAt,evidenceJson:JSON.stringify(campaignDriveEvidence(trip))}});
  }catch(e){await prisma.warmupRun.update({where:{id:run.id},data:{nextCheckAt,error:safeError(e)}});}
 }
 async function dispatch(run:WarmupRun) {
@@ -95,15 +146,21 @@ async function dispatch(run:WarmupRun) {
    if(c.profileBaselineJson&&JSON.parse(c.profileBaselineJson).wifiMac!==fingerprint.wifiMac)throw new HttpError(409,'Phone Wi-Fi hardware MAC changed. Review profile continuity before continuing.');
    if(!c.profileBaselineJson)await prisma.warmupCampaign.update({where:{id:c.id},data:{profileBaselineJson:JSON.stringify(fingerprint)}});
    const environment= c.environmentJson?JSON.parse(c.environmentJson):{};
-   const pointMatches=!!gps.point&&haversineMeters(c.lat,c.lng,gps.point.lat,gps.point.lng)<=10;
-   if(!pointMatches) {
-    if(environment.gpsAppliedAt&&Date.now()-Date.parse(environment.gpsAppliedAt)<600000)throw new HttpError(409,'Waiting for the provider GPS profile to match the assigned anchor');
-    await warmupIo.applyWarmupLocation(c.imageId,c.lat,c.lng,c.tenantId,beforeSend);
+   const durable={lat:c.device.currentLat,lng:c.device.currentLng};
+   const home={lat:c.lat,lng:c.lng};
+   const gpsDecision=gpsPreflight({durable,provider:gps.point,home,movementIncomplete:await movementIncomplete(c.id,run.id)});
+   if(gpsDecision.action==='NEEDS_ATTENTION') {
+    await prisma.warmupCampaign.update({where:{id:c.id},data:{status:'NEEDS_ATTENTION',error:'Provider GPS contradicts durable position after an incomplete movement'}});
+    throw new HttpError(409,'Provider GPS is not coherent with the durable position; campaign needs review');
+   }
+   if(gpsDecision.action==='ALIGN_PROVIDER') {
+    if(environment.gpsAppliedAt&&Date.now()-Date.parse(environment.gpsAppliedAt)<600000)throw new HttpError(409,'Waiting for the provider GPS profile to match the durable position');
+    await warmupIo.applyWarmupLocation(c.imageId,durable.lat,durable.lng,c.tenantId,beforeSend);
     await prisma.warmupCampaign.update({where:{id:c.id},data:{environmentJson:JSON.stringify({...environment,gpsAppliedAt:new Date().toISOString(),status:'AWAITING_GPS_READBACK'})}});
-    throw new HttpError(409,'Anchor applied; waiting for phone readiness and provider GPS readback');
+    throw new HttpError(409,'Durable position applied; waiting for phone readiness and provider GPS readback');
    }
    let selected=environment.wifi??null;
-   if(c.wifiMode==='CITY') {
+   if(c.wifiMode==='CITY'&&atHome(durable,home)) {
     // Pin the selected historical AP for this profile; shared dataset refreshes never rotate it silently.
     selected=selected??selectCityWifi(c.city.recordsJson,c.lat,c.lng);
     if(!selected)throw new HttpError(409,'No eligible saved Wi-Fi observation within 120 m of this phone’s anchor. Import city data or use Preserve mode.');
@@ -115,17 +172,23 @@ async function dispatch(run:WarmupRun) {
      throw new HttpError(409,'Wi-Fi profile applied; waiting for readback');
     }
    }
-   const observation={status:'PROVIDER_MATCH',checkedAt:new Date().toISOString(),position:gps.point,wifi:selected,cityRevision:c.city.revision,wifiMode:c.wifiMode,cell:'REFERENCE_ONLY',bluetooth:'REFERENCE_ONLY',androidObserved:false};
+   const observation={status:'PROVIDER_MATCH',checkedAt:new Date().toISOString(),position:gps.point??durable,wifi:selected,cityRevision:c.city.revision,wifiMode:c.wifiMode,cell:'REFERENCE_ONLY',bluetooth:'REFERENCE_ONLY',androidObserved:false};
    await prisma.warmupCampaign.update({where:{id:c.id},data:{environmentJson:JSON.stringify(observation),error:null}});
-   await prisma.device.update({where:{id:c.deviceId},data:{anchorLat:c.lat,anchorLng:c.lng,currentLat:c.lat,currentLng:c.lng,phase:'IDLE',lastSpeedMps:0}});
-   const task=JSON.parse(run.taskJson) as Task;
-   // issue_at has minute precision. Always schedule in a future full minute, in the explicitly selected provider timezone.
+   await prisma.device.update({where:{id:c.deviceId},data:{anchorLat:c.lat,anchorLng:c.lng}});
+   const task=slotOf(run);
+   if(isDriveSlot(task)) {
+    const destination=resolveDriveDestination(task,home);
+    const trip=await warmupIo.startCampaignDrive({tenantId:c.tenantId,imageId:c.imageId,campaignId:c.id,runId:run.id,origin:durable,destination});
+    await prisma.warmupRun.updateMany({where:{id:run.id,status:'PREPARING',campaign:{status:'RUNNING'}},data:{status:'RUNNING',startedAt:new Date(),error:null,evidenceJson:JSON.stringify(campaignDriveEvidence(trip)),nextCheckAt:new Date(Date.now()+5000)}});
+    return;
+   }
+   const rpa=task as Task;
    const executionAt=new Date((Math.floor(Date.now()/60000)+2)*60000);
-   if(+executionAt+task.expectedMinutes*60000>+run.deadlineAt)throw new HttpError(409,'Not enough time remains in today’s window for this task');
-   const variables={...task.variables};
-   const expand=(s:string)=>s.replace(/\{\{(day|city|latitude|longitude|imageId)\}\}/g,(_,key)=>String(({day:run.dayNumber,city:c.city.name,latitude:c.lat,longitude:c.lng,imageId:c.imageId} as any)[key]));
-   for(const key of Object.keys(variables))if(typeof variables[key]==='string')variables[key]=expand(variables[key] as string);
-   await warmupIo.triggerRpaTask(c.imageId,task.templateId,variables,{name:run.providerName,templateType:task.templateType,tenantId:c.tenantId,issueAt:providerTime(executionAt,c.providerTimezone),remark:`Warmup ${c.id} day ${run.dayNumber}`,requireAcceptance:true,beforeSend:async()=>{
+   if(+executionAt+rpa.expectedMinutes*60000>+run.deadlineAt)throw new HttpError(409,'Not enough time remains in today’s window for this task');
+   const variables={...rpa.variables};
+   const values={day:String(run.dayNumber),city:c.city.name,latitude:String(durable.lat),longitude:String(durable.lng),imageId:c.imageId};
+   for(const key of Object.keys(variables))if(typeof variables[key]==='string')variables[key]=expandWarmupText(variables[key] as string,values);
+   await warmupIo.triggerRpaTask(c.imageId,rpa.templateId,variables,{name:run.providerName,templateType:rpa.templateType,tenantId:c.tenantId,issueAt:providerTime(executionAt,c.providerTimezone),remark:`Warmup ${c.id} day ${run.dayNumber}`,requireAcceptance:true,beforeSend:async()=>{
     await beforeSend();if(sent)throw new HttpError(409,'Submission already attempted; reconciling before any further action');
     if(+executionAt-Date.now()<15000)throw new HttpError(409,'Dispatch window elapsed; retry deferred');
     const changed=await prisma.warmupRun.updateMany({where:{id:run.id,status:'PREPARING',campaign:{status:'RUNNING'}},data:{status:'SUBMITTING',issueAt:executionAt,submittedAt:new Date(),error:null}});
@@ -144,6 +207,14 @@ async function releasePower(id:string) {
   if(await prisma.warmupCampaign.count({where:{imageId:c.imageId,id:{not:c.id},reservedImageId:{not:null}}})){await prisma.warmupCampaign.update({where:{id:c.id},data:{powerOwned:false,powerRequestedAt:null}});return;}
   if(!c.powerOwned||c.device.activeTripId||await prisma.warmupRun.count({where:{campaignId:id,status:{in:busyRunStates}}}))return;
   if(c.status==='RUNNING'&&await prisma.warmupRun.count({where:{campaignId:id,status:'WAITING',deadlineAt:{gt:new Date()},scheduledAt:{lte:new Date(Date.now()+600000)}}}))return;
+  const gate=mayReleasePower({
+   atHome:atHome({lat:c.device.currentLat,lng:c.device.currentLng},{lat:c.lat,lng:c.lng}),
+   activeTrip:Boolean(c.device.activeTripId),
+   busyRuns:false,
+   upcomingWork:false,
+   phase:c.device.phase,
+  });
+  if(!gate.ok)return;
   const power=await warmupIo.checkDevicePower(c.deviceId,c.tenantId);
   if(power.duoPlusStatus===2){await prisma.warmupCampaign.update({where:{id},data:{powerOwned:false,powerRequestedAt:null}});return;}
   if(power.duoPlusStatus!==1)return;
@@ -167,18 +238,29 @@ export async function scanWarmup() {
  for(const c of campaigns) {
   if(c.activatedAt)await materializeDays(c.id,now);
   await prisma.warmupRun.updateMany({where:{campaignId:c.id,status:'WAITING',deadlineAt:{lte:now}},data:{status:'MISSED',completedAt:now,error:'Daily window ended without execution; retained in history'}});
+  const overdueMoves=await prisma.warmupRun.findMany({where:{campaignId:c.id,status:{in:['RUNNING','PREPARING']},deadlineAt:{lte:now}}});
+  for(const run of overdueMoves)if(isDriveSlot(slotOf(run)))await reconcileMovement(run,c.tenantId);
   const pastEnd=dayNumber(c.startDate,localParts(now,c.timezone).date)>c.durationDays;
   const unresolved=await prisma.warmupRun.count({where:{campaignId:c.id,status:{in:busyRunStates}}});
   if(pastEnd&&!unresolved) {
-   const total=expectedTaskCount(c.durationDays,JSON.parse(c.scheduleJson));const succeeded=await prisma.warmupRun.count({where:{campaignId:c.id,status:'SUCCEEDED'}});
+   const total=expectedTaskCount(c.durationDays,parseScheduleItems(c.scheduleJson));const succeeded=await prisma.warmupRun.count({where:{campaignId:c.id,status:'SUCCEEDED'}});
    await prisma.warmupCampaign.update({where:{id:c.id},data:{status:'COMPLETED',reservedImageId:null,completedAt:now,error:succeeded<total?`${succeeded} of ${total} tasks succeeded; review missed or failed work`:null}});
    await prisma.warmupEvent.create({data:{campaignId:c.id,kind:'COMPLETED',detail:`Calendar period ended. ${succeeded}/${total} tasks confirmed successful.`}});
   }
  }
  const due=await prisma.warmupRun.findMany({where:{status:'WAITING',scheduledAt:{lte:now},deadlineAt:{gt:now},campaign:{status:'RUNNING'},OR:[{nextCheckAt:null},{nextCheckAt:{lte:now}}]},orderBy:[{scheduledAt:'asc'},{id:'asc'}],take:30});
- // One dispatch per phone per scan; the persisted in-flight states keep later scans exclusive.
  const seen=new Set<string>();
  for(const run of due) {
+  const task=slotOf(run);
+  if(!isDriveSlot(task)&&task.dependsOn) {
+   const parent=await prisma.warmupRun.findFirst({where:{campaignId:run.campaignId,dayNumber:run.dayNumber,slotKey:task.dependsOn}});
+   const gate=dependentDispatch({dependsOnStatus:parent?.status??null,now,deadlineAt:run.deadlineAt});
+   if(gate.action==='WAIT')continue;
+   if(gate.action==='MISS') {
+    await prisma.warmupRun.updateMany({where:{id:run.id,status:'WAITING'},data:{status:'MISSED',completedAt:now,error:'Dependent movement did not arrive; retained in history'}});
+    continue;
+   }
+  }
   if(seen.has(run.campaignId))continue;seen.add(run.campaignId);
   try{await dispatch(run);}catch(e){await prisma.warmupRun.updateMany({where:{id:run.id,status:'WAITING'},data:{nextCheckAt:new Date(Date.now()+60000),error:safeError(e)}});}
  }

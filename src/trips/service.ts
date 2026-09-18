@@ -40,6 +40,7 @@ const createSchema = z.object({
 export type CreateTripInput = z.input<typeof createSchema>;
 export type TripEnvironmentInput = z.infer<typeof environmentInputSchema>;
 export interface TripCreateContext { idempotencyKey: string; requestHash: string }
+export interface WarmupTripOwner { campaignId: string; runId: string }
 const pendingCreates = new Map<string, { deviceId: string; requestHash: string; result: Promise<Awaited<ReturnType<typeof serializeTrip>>> }>();
 export interface TripArrivalWifi {
   enabled: boolean;
@@ -55,12 +56,36 @@ function parse<S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> {
   if (!result.success) throw new HttpError(400, "Invalid trip input");
   return result.data;
 }
-async function ownedDevice(tenantId: string, deviceId: string, tx: Prisma.TransactionClient = prisma): Promise<Device> {
+function warmupOwnerFrom(row: { phoneSyncJson: string | null }): WarmupTripOwner | null {
+  try {
+    const value: unknown = row.phoneSyncJson ? JSON.parse(row.phoneSyncJson) : null;
+    const warmup = value && typeof value === "object" ? (value as { warmup?: unknown }).warmup : null;
+    if (warmup && typeof warmup === "object" && typeof (warmup as WarmupTripOwner).campaignId === "string" &&
+        typeof (warmup as WarmupTripOwner).runId === "string") {
+      return { campaignId: (warmup as WarmupTripOwner).campaignId, runId: (warmup as WarmupTripOwner).runId };
+    }
+  } catch { /* malformed phoneSync is treated as an independent trip */ }
+  return null;
+}
+async function assertWarmupOwnsDevice(device: Device, owner: WarmupTripOwner, tx: Prisma.TransactionClient): Promise<void> {
+  const campaign = await tx.warmupCampaign.findFirst({
+    where: { id: owner.campaignId, tenantId: device.tenantId, deviceId: device.id, imageId: device.imageId,
+      reservedImageId: device.imageId, status: "RUNNING" },
+  });
+  if (!campaign) throw new HttpError(409, "This drive is not owned by the reserved warmup campaign.");
+  const run = await tx.warmupRun.findFirst({ where: { id: owner.runId, campaignId: owner.campaignId } });
+  if (!run) throw new HttpError(409, "Movement slot is not part of this campaign.");
+}
+async function loadDevice(tenantId: string, deviceId: string, tx: Prisma.TransactionClient = prisma, owner?: WarmupTripOwner | null): Promise<Device> {
   const device = await tx.device.findFirst({ where: { id: deviceId, tenantId } });
   if (!device) throw new HttpError(404, "Device not found");
-  await assertNoWarmup(device.id, tx);
   if (await tx.site.count({ where: { deviceId, tenantId } })) throw new HttpError(409, "A fixed client owns this phone. Driving is unavailable while it is assigned.");
+  if (owner) await assertWarmupOwnsDevice(device, owner, tx);
+  else await assertNoWarmup(device.id, tx);
   return device;
+}
+async function ownedDevice(tenantId: string, deviceId: string, tx: Prisma.TransactionClient = prisma): Promise<Device> {
+  return loadDevice(tenantId, deviceId, tx);
 }
 async function ownedTrip(tenantId: string, id: string, tx: Prisma.TransactionClient = prisma): Promise<DrivingTrip> {
   parse(identifier, tenantId); parse(identifier, id);
@@ -164,12 +189,13 @@ export async function listTrips(tenantId: string, deviceId?: string) {
   return Promise.all(rows.map(serializeTrip));
 }
 
-export async function createTrip(tenantId: string, value: CreateTripInput, context?: TripCreateContext) {
+export async function createTrip(tenantId: string, value: CreateTripInput, context?: TripCreateContext, owner?: WarmupTripOwner, alreadyOwned = false) {
   parse(identifier, tenantId);
   const input = parse(createSchema, value);
   if (context) parse(z.object({ idempotencyKey: identifier, requestHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), context);
   const device = await prisma.device.findFirst({ where: { tenantId, imageId: input.imageId } });
   if (!device) throw new HttpError(404, "Device not found");
+  if (!owner) await assertNoWarmup(device.id);
   const existing = async () => {
     if (!context) return null;
     const previous = await prisma.drivingTrip.findUnique({ where: { tenantId_idempotencyKey: { tenantId, idempotencyKey: context.idempotencyKey } } });
@@ -185,10 +211,10 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
     if (pending.deviceId !== device.id || pending.requestHash !== context!.requestHash) throw new HttpError(409, "This idempotency key is in use for a different trip request.");
     return pending.result;
   }
-  const result = withTripLease(device.id, tenantId, (lease) => withEnvironmentWindow(device.id, async () => {
+  const build = async (lease: TripLease) => {
     const duplicate = await existing();
     if (duplicate) return serializeTrip(duplicate);
-    const current = await ownedDevice(tenantId, device.id);
+    const current = await loadDevice(tenantId, device.id, prisma, owner);
     await assertNoPendingRpa(current.id);
     if (current.activeTripId) throw new HttpError(409, "This device already owns an active trip. Cancel it before preparing another.");
     const origin = { lat: current.currentLat, lng: current.currentLng };
@@ -205,7 +231,7 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
     let row: DrivingTrip;
     try {
       row = await prisma.$transaction(async (tx) => {
-        const fresh = await ownedDevice(tenantId, current.id, tx);
+        const fresh = await loadDevice(tenantId, current.id, tx, owner);
         await assertNoPendingRpa(fresh.id, tx);
         if (fresh.activeTripId || fresh.currentLat !== origin.lat || fresh.currentLng !== origin.lng) throw new HttpError(409, "The device moved while preparing the route. Preview again.");
         return tx.drivingTrip.create({ data: {
@@ -213,7 +239,7 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
           status: "PREVIEW", routeJson: JSON.stringify(route), alternativesJson: JSON.stringify(routes),
           optionsJson: JSON.stringify(timeline.options), originLat: origin.lat, originLng: origin.lng,
           durationMs: timeline.durationMs, arrivalWifiJson: JSON.stringify(arrivalWifi),
-          phoneSyncJson: JSON.stringify({ transport: usesPlayer(current.imageId) ? "DEVICE_PLAYER" : "REST_CHECKPOINTS", enabled: input.openMaps, maps: { status: input.openMaps ? "PENDING" : "DISABLED" } }),
+          phoneSyncJson: JSON.stringify({ transport: usesPlayer(current.imageId) ? "DEVICE_PLAYER" : "REST_CHECKPOINTS", enabled: input.openMaps, maps: { status: input.openMaps ? "PENDING" : "DISABLED" }, ...(owner ? { warmup: owner } : {}) }),
           ...(context ? { idempotencyKey: context.idempotencyKey, requestHash: context.requestHash } : {}),
         } });
       });
@@ -222,20 +248,24 @@ export async function createTrip(tenantId: string, value: CreateTripInput, conte
       throw error;
     }
     return serializeTrip(row);
-  }));
+  };
+  const heldLease = { assertOwned: async () => undefined } as TripLease;
+  const result = alreadyOwned ? build(heldLease) : withTripLease(device.id, tenantId, (lease) => withEnvironmentWindow(device.id, () => build(lease)));
   if (pendingKey) pendingCreates.set(pendingKey, { deviceId: device.id, requestHash: context!.requestHash, result });
   try { return await result; } finally { if (pendingKey && pendingCreates.get(pendingKey)?.result === result) pendingCreates.delete(pendingKey); }
 }
 
 async function mutate(tenantId: string, id: string, revision: string,
-  work: (row: DrivingTrip, device: Device, lease: TripLease) => Promise<void>) {
+  work: (row: DrivingTrip, device: Device, lease: TripLease) => Promise<void>, alreadyOwned = false) {
   const found = await ownedTrip(tenantId, id);
-  return withEnvironmentWindow(found.deviceId, () => withTripLease(found.deviceId, tenantId, async (lease) => {
+  const run = async (lease: TripLease) => {
     const row = await ownedTrip(tenantId, id);
     revisionMatches(row, revision);
-    await work(row, await ownedDevice(tenantId, row.deviceId), lease);
+    await work(row, await loadDevice(tenantId, row.deviceId, prisma, warmupOwnerFrom(row)), lease);
     return getTrip(tenantId, id);
-  }));
+  };
+  if (alreadyOwned) return run({ assertOwned: async () => undefined } as TripLease);
+  return withEnvironmentWindow(found.deviceId, () => withTripLease(found.deviceId, tenantId, run));
 }
 async function updateTrip(tx: Prisma.TransactionClient, row: DrivingTrip, data: Prisma.DrivingTripUpdateManyMutationInput) {
   const updated = await tx.drivingTrip.updateMany({ where: { id: row.id, tenantId: row.tenantId, revision: row.revision, status: row.status, device: { tenantId: row.tenantId } },
@@ -253,7 +283,7 @@ async function freshBaseline(device: Device) {
       movementRadiusM: device.movementRadiusM }, power: { status: 1, checkedAt: confirmed.lastPowerSyncAt?.toISOString() ?? null } };
 }
 
-export async function startTrip(tenantId: string, id: string, revision: string) {
+export async function startTrip(tenantId: string, id: string, revision: string, alreadyOwned = false) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
     requireStatus(row, ["PREVIEW"]);
     await assertNoPendingRpa(device.id);
@@ -277,7 +307,7 @@ export async function startTrip(tenantId: string, id: string, revision: string) 
       await updateTrip(tx, row, { status: "RUNNING", baselineJson: JSON.stringify(baseline), startedAt: now, lastStepAt: null,
         nextTickAt: now, pauseReason: null, error: null });
     });
-  });
+  }, alreadyOwned);
 }
 export async function pauseTrip(tenantId: string, id: string, revision: string) {
   return mutate(tenantId, id, revision, async (row, device, lease) => {
