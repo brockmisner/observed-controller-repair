@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx --test tests/*.test.ts",
+    "fixtures:radio": "node scripts/build-radio-contract-fixtures.mjs",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma --generator client",
     "prisma:generate:postgresql": "prisma generate --schema prisma/postgresql/schema.prisma --generator client",
     "prisma:generate:importer": "prisma generate --schema prisma/postgresql/schema.prisma --generator migrationClient",

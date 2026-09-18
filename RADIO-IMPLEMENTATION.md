@@ -37,6 +37,18 @@ correctly observe overlapping real network identities.
   and returns an explicitly synthetic preview, with applied=false and androidVerified=false.
   It does not reserve a runtime session, move a marker, write a phone, or run a plugin.
 
+## Frozen interface contract
+
+`contracts/radio/v1` holds the supported `duoplus.radio` protocol version 1: message
+shapes, identity and clock fields, HOLD/REPLACE/CLEAR directives, the result lifecycle
+and the readback vocabulary. Its fixtures are the shared conformance set for the
+controller and the plugin APK, and each case states the outcome a validator must
+produce. Controller implementation is `src/radio/contract.ts` and `src/radio/policy.ts`;
+`tests/radio-contract.test.ts` runs the fixtures. `npm run fixtures:radio` regenerates them.
+
+Freezing the contract does not implement delivery, application or observation. It fixes
+what the messages mean so both sides can be built and validated separately.
+
 ## Not built / not verified
 
 This is not a completed Android radio integration. The live marker is not yet
