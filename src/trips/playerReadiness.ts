@@ -30,9 +30,12 @@ export interface PlayerStatusSummary {
   appliedSequence: number;
 }
 
+export type PhonePowerState = 'ON' | 'OFF' | 'STARTING' | 'UNKNOWN';
+
 export type PlayerProbeOutcome =
   | { step: 'TARGET'; problem: string | null }
   | { step: 'ENDPOINT'; previousEndpoint: string }
+  | { step: 'POWER'; state: Exclude<PhonePowerState, 'ON'> }
   | { step: 'ADB'; state: string }
   | { step: 'APK' }
   | { step: 'CREDENTIAL' }
@@ -86,6 +89,10 @@ export function evaluatePlayerReadiness(
     case 'ENDPOINT':
       return result(imageId, endpoint, 'ENDPOINT_CHANGED',
         `The player endpoint changed from ${outcome.previousEndpoint}. Re-check this phone before driving it.`, checkedAt);
+    case 'POWER':
+      if (outcome.state === 'STARTING') return result(imageId, endpoint, 'STARTING', 'The phone is still starting', checkedAt);
+      return result(imageId, endpoint, 'UNREACHABLE', outcome.state === 'OFF'
+        ? 'The phone is powered off' : 'The phone\'s power state is not confirmed', checkedAt);
     case 'ADB':
       if (outcome.state === 'unauthorized') {
         return result(imageId, endpoint, 'UNAUTHENTICATED', 'ADB access is not authorized on this phone', checkedAt);
@@ -145,10 +152,7 @@ export function classifyConnectFailure(error: unknown): Extract<PlayerProbeOutco
 /** Readiness steps backed by one image's own gateway connection. */
 export function gatewaySteps(gateway: PlayerGateway = players): ReadinessSteps {
   return {
-    async adbState(target) {
-      try { await gateway.connect(target); return 'device'; }
-      catch (error) { return error instanceof Error && /not connected/.test(error.message) ? 'offline' : 'unreachable'; }
-    },
+    adbState: (target) => gateway.probeState(target),
     apkInstalled: (target) => gateway.apkInstalled(target),
     credentialPresent: (target) => gateway.hasCredential(target),
     async status(target) {
@@ -169,7 +173,7 @@ export class PlayerLifecycle {
   lastReadiness(imageId: string): PlayerReadiness | undefined { return this.last.get(imageId); }
   forget(imageId: string): void { this.memory.delete(imageId); this.last.delete(imageId); }
 
-  async check(imageId: string): Promise<PlayerReadiness> {
+  async check(imageId: string, context: { power?: PhonePowerState } = {}): Promise<PlayerReadiness> {
     const checkedAt = this.clock().toISOString();
     let target: PlayerTarget;
     try {
@@ -184,6 +188,11 @@ export class PlayerLifecycle {
       this.memory.set(imageId, { endpoint: target.endpoint, instanceId: null, sessionId: null });
       return this.record(imageId, evaluatePlayerReadiness(imageId, target.endpoint,
         { step: 'ENDPOINT', previousEndpoint: remembered.endpoint }, undefined, checkedAt));
+    }
+    // A phone that is off or still starting is reported as such rather than probed into a timeout.
+    if (context.power && context.power !== 'ON') {
+      return this.record(imageId, evaluatePlayerReadiness(imageId, target.endpoint,
+        { step: 'POWER', state: context.power }, remembered, checkedAt));
     }
     const outcome = await this.probe(target);
     const readiness = evaluatePlayerReadiness(imageId, target.endpoint, outcome, remembered, checkedAt);

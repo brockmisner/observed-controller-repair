@@ -92,6 +92,14 @@ export class PlayerGateway {
     if (await this.deps.adb.state(target) !== 'device') throw new Error('Player phone is not connected');
   }
 
+  /** Reports the phone's own ADB state rather than collapsing every failure into one word. */
+  async probeState(target: PlayerTarget): Promise<string> {
+    try { await this.deps.adb.connect(target); }
+    catch { return 'unreachable'; }
+    try { return await this.deps.adb.state(target); }
+    catch { return 'unreachable'; }
+  }
+
   async withPlayer<T>(imageId: string, work: (client: PlayerSocket, target: PlayerTarget) => Promise<T>): Promise<T> {
     const target = this.target(imageId);
     await this.connect(target);
@@ -156,10 +164,11 @@ export class PlayerGateway {
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const status = await this.withPlayer(imageId, c => c.request({ op: 'status' }));
-        if (status.cleanup_ok !== true || status.state !== 'IDLE') throw new Error('Player is not idle');
-        return;
-      } catch (error) { if (attempt === 4) throw error; await new Promise(r => setTimeout(r, 1000)); }
+        if (status.cleanup_ok === true && status.state === 'IDLE') return;
+      } catch { /* The phone may still be starting the player. */ }
+      await new Promise(r => setTimeout(r, 1000));
     }
+    throw new Error('Player did not become ready; check location permissions');
   }
 
   /** Shares concurrent checks per image. Status never starts, cancels or heartbeats a route. */

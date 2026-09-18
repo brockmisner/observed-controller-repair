@@ -120,10 +120,8 @@ export async function authorizeImageWriter(tenantId: string, imageId: string, st
   const rows = await store.devicesForImage(imageId);
   const mine = rows.find((row) => row.tenantId === tenantId);
   if (!mine) throw new HttpError(404, 'This workspace does not own the phone for this image');
-  const foreignTrip = rows.find((row) => row.tenantId !== tenantId && row.activeTripId);
+  const foreignTrip = rows.find((row) => row.id !== mine.id && row.activeTripId);
   if (foreignTrip) throw new HttpError(409, 'Another workspace trip owns this physical phone. Cancel it first.');
-  const sibling = rows.find((row) => row.tenantId === tenantId && row.id !== mine.id && row.activeTripId);
-  if (sibling) throw new HttpError(409, 'Another trip in this workspace owns this physical phone. Cancel it first.');
   const reservation = await store.reservationForImage(imageId);
   if (reservation && (reservation.tenantId !== tenantId || reservation.deviceId !== mine.id)) {
     throw new HttpError(409, 'A campaign reservation owns this physical phone.');

@@ -9,6 +9,7 @@ import { terminal, type PlayerStatus } from './playerProtocol.js';
 import { PlayerPlanCache } from './playerPlan.js';
 import type { TripLease } from './lease.js';
 import { authorizeImageWriter, prismaImageOwnershipStore } from './imageOwnership.js';
+import { playerLifecycle, type PhonePowerState } from './playerReadiness.js';
 import { ensureTripMaps } from './phoneSync.js';
 const planCache = new PlayerPlanCache();
 interface PlayerState {
@@ -46,14 +47,25 @@ export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
     else await store(trip, { ...p, status, checkedAt: new Date().toISOString() });
   } finally { planCache.delete(trip.id); }
 }
+/** Cached provider power state. The trip start path still confirms power with the provider. */
+async function lastKnownPower(deviceId: string): Promise<PhonePowerState> {
+  const device = await prisma.device.findUnique({ where: { id: deviceId }, select: { poweredOn: true, duoPlusStatus: true } });
+  if (!device) return 'UNKNOWN';
+  if (device.poweredOn && device.duoPlusStatus === 1) return 'ON';
+  if (device.duoPlusStatus === 10 || device.duoPlusStatus === 11) return 'STARTING';
+  return device.poweredOn ? 'UNKNOWN' : 'OFF';
+}
 export async function preparePlayerStart(trip: DrivingTrip): Promise<void> {
   if (!usesPlayer(trip.imageId)) return;
   if (config.dryRun) throw new HttpError(409, 'Player driving is disabled in dry-run mode');
   if (JSON.parse(trip.arrivalWifiJson).enabled) throw new HttpError(409, 'Disable arrival Wi-Fi for device-side playback.');
   // Physical-image scope prevents two workspace rows or a campaign reservation from driving the same phone.
   await authorizeImageWriter(trip.tenantId, trip.imageId, prismaImageOwnershipStore);
-  const status = await withPlayer(trip.imageId, c => c.request({ op: 'status' })).catch(() => { throw new HttpError(409, 'DuoMove Player is unreachable. Open the app on the phone and check ADB.'); });
-  if (!status.cleanup_ok || !(status.state === 'IDLE' || terminal(status))) throw new HttpError(409, 'DuoMove Player already has a session or needs provider cleanup.');
+  const power = await lastKnownPower(trip.deviceId);
+  let readiness = await playerLifecycle.check(trip.imageId, { power });
+  // A restart is recorded on the first check; the phone may still be ready for a new session.
+  if (readiness.code === 'RESTARTED') readiness = await playerLifecycle.check(trip.imageId);
+  if (!readiness.ready) throw new HttpError(409, `${readiness.detail} (${readiness.code}).`);
 }
 async function recordProgress(trip: DrivingTrip, p: PlayerState) {
   const status = p.status!;
