@@ -39,6 +39,13 @@ export interface TripRadioOpen {
   delivery?: RadioDeliveryAdapter;
   clockAnchor?: ClockAnchor | null;
   sessionId?: string;
+  /**
+   * Cellular is unsupported for this service area unless a funded LTE/NR dataset exists.
+   * Default HOLD so arrival can complete on Wi-Fi + Bluetooth.
+   */
+  cellApplication?: 'HOLD' | 'REPLACE';
+  /** Plugin-declared scope; a frame computed for a different fingerprint cannot apply. */
+  capabilitiesScopeFingerprint?: string;
 }
 
 export interface RadioTickResult {
@@ -109,9 +116,22 @@ export class TripRadioRuntime {
     };
   }
 
+  identity() {
+    return {
+      tenantId: this.options.tenantId, imageId: this.options.imageId, tripId: this.options.tripId,
+      deviceId: this.options.deviceId, sessionId: this.sessionId, bootId: this.options.bootId,
+      instanceId: this.options.instanceId, datasetRevision: this.options.datasetRevision, source: this.source,
+    };
+  }
+
+  lastAccepted() { return this.lastTick; }
+
   async ingest(progress: GpsRadioProgress): Promise<RadioTickResult> {
     if (progress.tenantId !== this.options.tenantId || progress.imageId !== this.options.imageId || progress.tripId !== this.options.tripId) {
       throw new Error('GPS progress does not belong to this radio session');
+    }
+    if (this.options.capabilitiesScopeFingerprint && this.options.capabilitiesScopeFingerprint !== this.options.scopeFingerprint) {
+      throw new Error('Wrong-scope frame cannot apply: capabilities scopeFingerprint does not match the session');
     }
     if (!Number.isSafeInteger(progress.sequence) || progress.sequence < 0 || !Number.isSafeInteger(progress.elapsedMs) || progress.elapsedMs < 0) {
       throw new Error('Invalid GPS progress clock');
@@ -269,7 +289,15 @@ export class TripRadioRuntime {
       bluetoothSampledSimElapsedMs: frame.bluetooth?.[0]?.sampleElapsedMs ?? null,
     };
     if (progress.phase === 'CLEANUP') return cleanupRequest(frame, context);
-    return applyRequestFromFrame(frame, context);
+    const apply = applyRequestFromFrame(frame, context);
+    if ((this.options.cellApplication ?? 'HOLD') === 'HOLD' && apply.cells.directive === 'REPLACE') {
+      return applyRequestSchema.parse({
+        ...apply,
+        cells: { directive: 'HOLD', entries: null },
+        warnings: apply.warnings.filter((warning) => !/^(NO_ELIGIBLE_CELL|CELL_|SECTOR_UNKNOWN)/.test(warning)),
+      });
+    }
+    return apply;
   }
 
   private event(tick: RadioTickResult, patch: Partial<{
