@@ -15,9 +15,11 @@ establish what a phone currently returns, or prove that the installed bytes matc
 
 Devices → Overview → **Verify player APK** calls the authenticated,
 tenant-scoped `POST /devices/:id/player/verify` endpoint. Each registered phone
-can be checked independently. Only the physical image configured by
-`DUOMOVE_IMAGE_ID` and its existing `ADB_PREFLIGHT_ENDPOINT` mapping can use
-direct ADB, and only when it has no assignment in another tenant. All other
+can be checked independently. Only a physical image with its own configured
+player target (`DUOMOVE_PLAYER_TARGETS`, or the single-phone `DUOMOVE_IMAGE_ID`
+plus `ADB_PREFLIGHT_ENDPOINT` pair) can use direct ADB, over that image's own
+endpoint and credential, and only when it has no assignment in another tenant.
+See `PHONE-TARGETING.md` for the per-phone registry. All other
 phones use fixed read-only DuoPlus commands authorized by the requesting
 workspace's provider API key. Shared ADB remains blocked. Provider
 denial stops the check; it never falls back to the shared ADB token. Player socket

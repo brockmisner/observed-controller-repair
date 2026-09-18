@@ -27,8 +27,13 @@ correctly observe overlapping real network identities.
   milliseconds, explicitly NOT Android boot-time scan timestamps.
 - Bluetooth action is HOLD/null during movement, REPLACE after arrival. A null result
   means leave current state alone; it must not clear the phone's existing Bluetooth state.
-- Session ownership rejects a second owner of the same physical image. Runtime state
-  is in memory; expired/restarted sessions require explicit re-creation. No silent replay.
+- Session ownership rejects a second owner of the same physical image. Radio writes and
+  player lifecycle work run under the Redis physical-image lease with a fencing epoch, so
+  an expired worker cannot overwrite a newer owner's work. Simulation runtime state is
+  still in memory; expired/restarted sessions require explicit re-creation. No silent replay.
+- Authenticated per-phone delivery adapter with bounded payloads, timeouts, identity checks
+  and explicit applied/received/rejected/uncertain results, behind a replaceable wire codec.
+  Its receiver is a stub: no radio APK exists. See `PHONE-TARGETING.md`.
 - Arrival gate requires fresh, continuous stationary location fixes. Its readback
   contract rejects wrong phone/session/boot/hash, stale readings, unavailable radios,
   and differing network identities/measurements. It consumes authenticated adapter
@@ -49,8 +54,9 @@ The existing checker-only module remains unchanged.
 Remaining integration work depends on the rebuilt plugin's actual supported interface:
 
 1. The Android module/receiver and a declared scope for each supported radio API.
-2. Authenticated per-device delivery and acknowledgments bound to image, session,
-   boot and sequence; explicit restart, pause/resume and reconnect behavior.
+2. The delivered request/response schema, adopted through the controller's wire codec
+   seam. Controller-side delivery, identity binding and result meanings are implemented
+   against a stub receiver; explicit pause/resume and reconnect behavior is not.
 3. Live movement acknowledgments feeding the corresponding radio session, with
    Bluetooth updates gated by confirmed arrival.
 4. Independent Android API readback and a two-phone test covering distinct locations,
