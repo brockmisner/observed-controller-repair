@@ -24,7 +24,9 @@
     "db:push": "prisma db push",
     "cli": "tsx src/cli/index.ts",
     "test:warmup": "node --import tsx scripts/test-warmup-integration.ts",
-    "test:rpa": "node --import tsx scripts/test-rpa-reliability.ts"
+    "test:rpa": "node --import tsx scripts/test-rpa-reliability.ts",
+    "test:area": "node --import tsx scripts/test-area-dataset-integration.ts",
+    "area": "tsx scripts/area-dataset.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.10.1",
