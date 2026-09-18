@@ -27,6 +27,11 @@ async function store(trip: DrivingTrip, player: PlayerState) {
   trip.phoneSyncJson = JSON.stringify(sync);
 }
 function matched(s: PlayerStatus, p: PlayerState) {
+  // Other deployments drive these phones over ADB without seeing this controller's lease. A live
+  // session we did not open is named as such instead of being reported as our own restart.
+  if (s.session_id && s.session_id !== p.sessionId && (!p.instanceId || s.instance_id === p.instanceId)) {
+    throw new HttpError(409, 'Another writer owns this player session. This controller did not open it and did not replay anything.');
+  }
   if (s.session_id !== p.sessionId || (p.instanceId && s.instance_id !== p.instanceId)) {
     throw new HttpError(409, 'Player restarted or session changed. No automatic replay was attempted.');
   }
@@ -45,6 +50,7 @@ export async function stopPlayerTrip(trip: DrivingTrip): Promise<void> {
     if (!status.cleanup_ok || (!terminal(status) && status.state !== 'IDLE')) throw new HttpError(409, 'Player provider cleanup is unconfirmed. Ownership is retained.');
     if (status.session_id === p.sessionId) await recordProgress(trip, { ...p, status, checkedAt: new Date().toISOString() });
     else await store(trip, { ...p, status, checkedAt: new Date().toISOString() });
+    playerLifecycle.release(trip.imageId, p.sessionId);
   } finally { planCache.delete(trip.id); }
 }
 /** Cached provider power state. The trip start path still confirms power with the provider. */
@@ -102,6 +108,7 @@ export async function stepPlayerTrip(trip: DrivingTrip, lease: TripLease): Promi
       await ensureTripMaps(trip, JSON.parse(trip.routeJson).destination, requireOwner);
       p = { sessionId: randomUUID(), offsetMs: trip.elapsedMs };
       await store(trip, p); // Persist identity BEFORE sending any command.
+      playerLifecycle.authorize(trip.imageId, p.sessionId);
     }
     const player = p;
     const { bytes, sha256 } = planCache.get(trip, player);

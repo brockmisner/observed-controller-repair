@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CREDENTIAL_PATTERN, provisionerFor } from '../src/trips/playerCredentials.js';
+import { CREDENTIAL_PATTERN, playerCredentialSlot, provisionerFor, readCredentialSlot } from '../src/trips/playerCredentials.js';
+import { adbKeyPath, ensureAdbClientIdentity } from '../src/trips/adbIdentity.js';
 import { parsePlayerTargets, playerImageIds, requirePlayerTarget, findPlayerTarget, usesPlayer,
   resetPlayerRegistry, PlayerTargetError, type PlayerTarget } from '../src/trips/playerTargets.js';
 import { PlayerGateway, type PlayerAdbDriver } from '../src/trips/playerConnection.js';
@@ -334,6 +335,87 @@ test('credential provisioning is chosen per package, not assumed to be run-as', 
     assert.equal(pushed.every((entry) => entry.packageName === player.packageName), true,
       'only the debuggable package is ever provisioned over run-as');
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('the deployed single-phone configuration keeps the token the phone already holds', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'player-migration-'));
+  try {
+    const legacy = join(directory, 'duomove-control-token');
+    writeFileSync(legacy, 'deployed-player-token-aaaaaaaaaaaaaaaa\n');
+    const registry = parsePlayerTargets({ DUOMOVE_STATE_DIR: directory, DUOMOVE_IMAGE_ID: 'demo-phone',
+      ADB_PREFLIGHT_ENDPOINT: demo.endpoint } as NodeJS.ProcessEnv);
+    const target = registry.targets.get('demo-phone')!;
+    assert.equal(target.legacyCredentialPath, legacy);
+
+    const slot = playerCredentialSlot(target);
+    assert.equal(await readCredentialSlot(slot), 'deployed-player-token-aaaaaaaaaaaaaaaa');
+    // Adopted once, so the per-image path is authoritative from then on.
+    assert.equal(readFileSync(slot.path, 'utf8'), 'deployed-player-token-aaaaaaaaaaaaaaaa');
+    rmSync(legacy);
+    assert.equal(await readCredentialSlot(slot), 'deployed-player-token-aaaaaaaaaaaaaaaa');
+
+    // Other images never read the single-phone token.
+    const fleet = parsePlayerTargets({ DUOMOVE_STATE_DIR: directory, DUOMOVE_IMAGE_ID: 'demo-phone',
+      ADB_PREFLIGHT_ENDPOINT: demo.endpoint, DUOMOVE_PLAYER_TARGETS: JSON.stringify([phoneA]) } as NodeJS.ProcessEnv);
+    assert.equal(fleet.targets.get('phone-a')!.legacyCredentialPath, null);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('the ADB client identity is injected or persisted rather than minted per deploy', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'adb-identity-'));
+  const key = ['-----BEGIN PRIVATE KEY-----', 'MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu', '-----END PRIVATE KEY-----'].join('\n');
+  try {
+    const ephemeral = await ensureAdbClientIdentity({ DUOMOVE_STATE_DIR: directory } as NodeJS.ProcessEnv);
+    assert.equal(ephemeral.source, 'EPHEMERAL');
+    assert.equal(ephemeral.path, null);
+    assert.match(ephemeral.detail, /new public key to every phone after each redeploy/);
+
+    const env = { DUOMOVE_STATE_DIR: directory, ADB_PRIVATE_KEY_BASE64: Buffer.from(key).toString('base64') } as NodeJS.ProcessEnv;
+    const injected = await ensureAdbClientIdentity(env);
+    assert.equal(injected.source, 'INJECTED');
+    assert.equal(injected.path, adbKeyPath(env));
+    assert.equal(env.ADB_VENDOR_KEYS, injected.path);
+    assert.equal(readFileSync(injected.path!, 'utf8').trim(), key);
+    assert.equal(statSync(injected.path!).mode & 0o777, 0o600);
+
+    // A redeploy without the variable reuses the volume copy instead of presenting a new key.
+    const persisted = await ensureAdbClientIdentity({ DUOMOVE_STATE_DIR: directory } as NodeJS.ProcessEnv);
+    assert.equal(persisted.source, 'PERSISTED');
+    assert.equal(persisted.path, injected.path);
+
+    assert.equal((await ensureAdbClientIdentity({ DUOMOVE_STATE_DIR: directory, ADB_PRIVATE_KEY_BASE64: 'bm90LWEta2V5' } as NodeJS.ProcessEnv)).source,
+      'PERSISTED', 'an unusable injected key never silently becomes a fresh identity');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('a session this controller did not open is reported as a foreign writer', async () => {
+  process.env.DUOMOVE_PLAYER_TARGETS = JSON.stringify([phoneA]);
+  resetPlayerRegistry();
+  try {
+    let status = summary({ sessionId: 'session-from-another-system', state: 'RUNNING' });
+    const steps: ReadinessSteps = { adbState: async () => 'device', apkInstalled: async () => true,
+      credentialPresent: async () => true, status: async () => status };
+    // Sessions opened before a restart are recovered from persisted trips, not assumed foreign.
+    const persisted: string[] = [];
+    const lifecycle = new PlayerLifecycle(steps, { authorizedSessions: async () => persisted });
+
+    const foreign = await lifecycle.check('phone-a');
+    assert.equal(foreign.code, 'FOREIGN_SESSION');
+    assert.equal(foreign.ready, false);
+    assert.equal(foreign.sessionId, 'session-from-another-system');
+    assert.match(foreign.detail, /did not authorize/);
+
+    lifecycle.authorize('phone-a', 'session-from-another-system');
+    assert.equal((await lifecycle.check('phone-a')).code, 'BUSY', 'our own running session is busy, not foreign');
+
+    status = summary({ sessionId: 'session-before-restart', state: 'RUNNING' });
+    assert.equal((await lifecycle.check('phone-a')).code, 'FOREIGN_SESSION');
+    persisted.push('session-before-restart');
+    assert.equal((await lifecycle.check('phone-a')).code, 'BUSY');
+  } finally {
+    delete process.env.DUOMOVE_PLAYER_TARGETS;
+    resetPlayerRegistry();
+  }
 });
 
 test('an unconfigured or misconfigured phone reports why, without a usable target', async () => {

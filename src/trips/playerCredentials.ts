@@ -19,6 +19,8 @@ export interface CredentialSlot {
   packageName: string;
   /** Controller-side file that holds it. Mode 0600, never logged, never sent to a browser. */
   path: string;
+  /** Pre-registry location for this credential, adopted once so a running phone keeps working. */
+  legacyPath?: string | null;
   mode: CredentialMode;
 }
 
@@ -36,7 +38,8 @@ export interface CredentialProvisioner {
 export class CredentialProvisioningError extends Error {}
 
 export const playerCredentialSlot = (target: PlayerTarget): CredentialSlot =>
-  ({ imageId: target.imageId, packageName: target.playerPackage, path: target.credentialPath, mode: target.credentialMode });
+  ({ imageId: target.imageId, packageName: target.playerPackage, path: target.credentialPath,
+    legacyPath: target.legacyCredentialPath, mode: target.credentialMode });
 
 export const radioAgentCredentialSlot = (target: PlayerTarget): CredentialSlot =>
   ({ imageId: target.imageId, packageName: target.radioAgent.packageName, path: target.radioAgent.credentialPath,
@@ -49,6 +52,20 @@ export async function readCredentialFile(path: string): Promise<string | null> {
   } catch { return null; }
 }
 
+/**
+ * Reads the slot, adopting the pre-registry file once when only that exists. The phone already
+ * holds that token, so a deployment that upgrades into per-image credentials keeps working.
+ */
+export async function readCredentialSlot(slot: CredentialSlot): Promise<string | null> {
+  const current = await readCredentialFile(slot.path);
+  if (current) return current;
+  if (!slot.legacyPath) return null;
+  const legacy = await readCredentialFile(slot.legacyPath);
+  if (!legacy) return null;
+  await writeCredentialFile(slot.path, legacy);
+  return legacy;
+}
+
 async function writeCredentialFile(path: string, secret: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFile(path, secret, { mode: 0o600 });
@@ -58,7 +75,7 @@ async function writeCredentialFile(path: string, secret: string): Promise<void> 
 export const runAsProvisioner: CredentialProvisioner = {
   mode: 'RUN_AS',
   async provision(slot, tools, options = {}) {
-    const existing = options.rotate ? null : await readCredentialFile(slot.path);
+    const existing = options.rotate ? null : await readCredentialSlot(slot);
     const secret = existing ?? randomBytes(32).toString('base64url');
     if (!existing) await writeCredentialFile(slot.path, secret);
     await tools.pushViaRunAs(slot.packageName, secret);
@@ -78,7 +95,7 @@ export const operatorSuppliedProvisioner: CredentialProvisioner = {
       throw new CredentialProvisioningError(
         `Rotating ${slot.packageName} on ${slot.imageId} requires re-provisioning on the phone and replacing ${slot.path}`);
     }
-    const secret = await readCredentialFile(slot.path);
+    const secret = await readCredentialSlot(slot);
     if (!secret) {
       throw new CredentialProvisioningError(
         `No credential for ${slot.packageName} on ${slot.imageId}. Provision it on the phone and place it at ${slot.path}`);
@@ -95,7 +112,7 @@ export const operatorSuppliedProvisioner: CredentialProvisioner = {
 export const agentMintedProvisioner: CredentialProvisioner = {
   mode: 'AGENT_MINTED',
   async provision(slot) {
-    const existing = await readCredentialFile(slot.path);
+    const existing = await readCredentialSlot(slot);
     if (existing) return existing;
     throw new CredentialProvisioningError(
       `Agent-minted credentials need the radio agent's disclosure interface, which is not delivered. ` +
@@ -114,7 +131,7 @@ export function provisionerFor(mode: CredentialMode): CredentialProvisioner {
 
 /** Reads an already-provisioned credential. Never provisions as a side effect of a read. */
 export async function requireCredential(slot: CredentialSlot): Promise<string> {
-  const secret = await readCredentialFile(slot.path);
+  const secret = await readCredentialSlot(slot);
   if (!secret) {
     throw new CredentialProvisioningError(slot.mode === 'RUN_AS'
       ? `${slot.packageName} setup is incomplete on ${slot.imageId}`

@@ -20,6 +20,7 @@ export type PlayerReadinessCode =
   | 'NOT_ACTIVATED'
   | 'UNAUTHENTICATED'
   | 'RESTARTED'
+  | 'FOREIGN_SESSION'
   | 'BUSY';
 
 export interface PlayerStatusSummary {
@@ -73,14 +74,22 @@ const result = (
   instanceId: null, sessionId: null, previousInstanceId: null, appliedSequence: null, ...extra,
 });
 
+export interface ReadinessContext {
+  remembered?: RememberedPlayer;
+  /** Sessions this controller opened. Anything else on the phone is somebody else's writer. */
+  authorizedSessions?: string[];
+  checkedAt?: string;
+}
+
 /** Pure mapping from one probe outcome to one truthful readiness result. */
 export function evaluatePlayerReadiness(
   imageId: string,
   endpoint: string | null,
   outcome: PlayerProbeOutcome,
-  remembered?: RememberedPlayer,
-  checkedAt: string = new Date().toISOString(),
+  context: ReadinessContext = {},
 ): PlayerReadiness {
+  const { remembered, authorizedSessions = [] } = context;
+  const checkedAt = context.checkedAt ?? new Date().toISOString();
   switch (outcome.step) {
     case 'TARGET':
       return outcome.problem
@@ -119,6 +128,13 @@ export function evaluatePlayerReadiness(
       const { status } = outcome;
       const identity = { instanceId: status.instanceId, sessionId: status.sessionId || null,
         previousInstanceId: remembered?.instanceId ?? null, appliedSequence: status.appliedSequence };
+      // Other deployments reach these phones over ADB without seeing this controller's lease, so a
+      // session we did not open is reported as a foreign writer rather than as our own busy phone.
+      if (status.sessionId && !authorizedSessions.includes(status.sessionId)) {
+        return result(imageId, endpoint, 'FOREIGN_SESSION',
+          'A player session this controller did not authorize is running on this phone. Another system or an earlier controller process owns it.',
+          checkedAt, identity);
+      }
       if (remembered?.instanceId && remembered.instanceId !== status.instanceId) {
         return result(imageId, endpoint, 'RESTARTED',
           'The player restarted on this phone. No session was replayed; start explicitly.', checkedAt, identity);
@@ -132,6 +148,11 @@ export function evaluatePlayerReadiness(
       return result(imageId, endpoint, 'READY', 'The player answered on this phone and is idle', checkedAt, identity);
     }
   }
+}
+
+export interface LifecycleDeps {
+  /** Sessions this controller owns for an image, including ones opened before a restart. */
+  authorizedSessions?(imageId: string): Promise<string[]>;
 }
 
 export interface ReadinessSteps {
@@ -167,11 +188,27 @@ export function gatewaySteps(gateway: PlayerGateway = players): ReadinessSteps {
 export class PlayerLifecycle {
   private memory = new Map<string, RememberedPlayer>();
   private last = new Map<string, PlayerReadiness>();
-  constructor(private readonly steps: ReadinessSteps, private readonly clock: () => Date = () => new Date()) {}
+  private authorized = new Map<string, Set<string>>();
+  constructor(private readonly steps: ReadinessSteps, private readonly deps: LifecycleDeps = {},
+    private readonly clock: () => Date = () => new Date()) {}
 
   remembered(imageId: string): RememberedPlayer | undefined { return this.memory.get(imageId); }
   lastReadiness(imageId: string): PlayerReadiness | undefined { return this.last.get(imageId); }
   forget(imageId: string): void { this.memory.delete(imageId); this.last.delete(imageId); }
+
+  /** Records a session this controller opened, before any command is sent under it. */
+  authorize(imageId: string, sessionId: string): void {
+    const sessions = this.authorized.get(imageId) ?? new Set<string>();
+    sessions.add(sessionId);
+    this.authorized.set(imageId, sessions);
+  }
+  release(imageId: string, sessionId: string): void { this.authorized.get(imageId)?.delete(sessionId); }
+
+  private async authorizedSessions(imageId: string): Promise<string[]> {
+    const own = [...this.authorized.get(imageId) ?? []];
+    const persisted = await this.deps.authorizedSessions?.(imageId).catch(() => []) ?? [];
+    return [...new Set([...own, ...persisted])];
+  }
 
   async check(imageId: string, context: { power?: PhonePowerState } = {}): Promise<PlayerReadiness> {
     const checkedAt = this.clock().toISOString();
@@ -181,21 +218,22 @@ export class PlayerLifecycle {
       if (!found) throw new PlayerTargetError(imageId, 'missing');
       target = found;
     } catch {
-      return this.record(imageId, evaluatePlayerReadiness(imageId, null, { step: 'TARGET', problem: playerTargetProblem(imageId) }, undefined, checkedAt));
+      return this.record(imageId, evaluatePlayerReadiness(imageId, null, { step: 'TARGET', problem: playerTargetProblem(imageId) }, { checkedAt }));
     }
     const remembered = this.memory.get(imageId);
     if (remembered && remembered.endpoint !== target.endpoint) {
       this.memory.set(imageId, { endpoint: target.endpoint, instanceId: null, sessionId: null });
       return this.record(imageId, evaluatePlayerReadiness(imageId, target.endpoint,
-        { step: 'ENDPOINT', previousEndpoint: remembered.endpoint }, undefined, checkedAt));
+        { step: 'ENDPOINT', previousEndpoint: remembered.endpoint }, { checkedAt }));
     }
     // A phone that is off or still starting is reported as such rather than probed into a timeout.
     if (context.power && context.power !== 'ON') {
       return this.record(imageId, evaluatePlayerReadiness(imageId, target.endpoint,
-        { step: 'POWER', state: context.power }, remembered, checkedAt));
+        { step: 'POWER', state: context.power }, { remembered, checkedAt }));
     }
     const outcome = await this.probe(target);
-    const readiness = evaluatePlayerReadiness(imageId, target.endpoint, outcome, remembered, checkedAt);
+    const readiness = evaluatePlayerReadiness(imageId, target.endpoint, outcome,
+      { remembered, checkedAt, authorizedSessions: await this.authorizedSessions(imageId) });
     if (outcome.step === 'STATUS') {
       this.memory.set(imageId, { endpoint: target.endpoint, instanceId: outcome.status.instanceId, sessionId: outcome.status.sessionId || null });
     } else if (!this.memory.has(imageId)) {
@@ -224,4 +262,19 @@ export class PlayerLifecycle {
   }
 }
 
-export const playerLifecycle = new PlayerLifecycle(gatewaySteps());
+/** Trips persist the sessions this controller opened, so a restart does not forget its own work. */
+async function persistedSessions(imageId: string): Promise<string[]> {
+  const { prisma } = await import('../db.js');
+  const trips = await prisma.drivingTrip.findMany({
+    where: { imageId, status: { in: ['RUNNING', 'ARRIVING', 'PAUSED'] } },
+    select: { phoneSyncJson: true },
+  });
+  return trips.flatMap((trip) => {
+    try {
+      const sessionId = JSON.parse(trip.phoneSyncJson || '{}').player?.sessionId;
+      return typeof sessionId === 'string' && sessionId ? [sessionId] : [];
+    } catch { return []; }
+  });
+}
+
+export const playerLifecycle = new PlayerLifecycle(gatewaySteps(), { authorizedSessions: persistedSessions });

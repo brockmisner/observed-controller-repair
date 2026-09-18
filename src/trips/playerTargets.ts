@@ -41,6 +41,8 @@ export interface PlayerTarget {
   playerPackage: string;
   /** Controller-side file holding this image's player token. Never logged, never sent to a browser. */
   credentialPath: string;
+  /** Single-phone token path this image used before the registry existed; adopted once if present. */
+  legacyCredentialPath: string | null;
   credentialMode: CredentialMode;
   /** Radio agent target. No radio artifact is shipped yet; see PHONE-TARGETING.md. */
   radioAgent: RadioAgentTarget;
@@ -68,6 +70,11 @@ const credentialModes: CredentialMode[] = ['RUN_AS', 'AGENT_MINTED', 'OPERATOR_S
 
 export function stateDirectory(env: NodeJS.ProcessEnv = process.env): string {
   return env.DUOMOVE_STATE_DIR || '/app/data';
+}
+
+/** Where the single configured player kept its token before per-image credentials existed. */
+export function legacyCredentialPath(env: NodeJS.ProcessEnv = process.env): string {
+  return `${stateDirectory(env)}/duomove-control-token`;
 }
 
 /** Deterministic, traversal-free credential path derived from the image identity. */
@@ -181,7 +188,9 @@ export function parsePlayerTargets(env: NodeJS.ProcessEnv = process.env): Player
     byEndpoint.set(endpoint, imageId);
     targets.set(imageId, { imageId, label: typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim().slice(0, 80) : imageId,
       endpoint, controlPort, playerPackage, credentialMode, radioAgent,
-      credentialPath: credentialPathFor(imageId, 'player', env) });
+      credentialPath: credentialPathFor(imageId, 'player', env),
+      // The deployed single-phone configuration keeps its existing token, which the phone still holds.
+      legacyCredentialPath: imageId === legacyImage ? legacyCredentialPath(env) : null });
   }
   return { targets, problems };
 }

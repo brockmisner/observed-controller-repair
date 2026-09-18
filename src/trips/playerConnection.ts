@@ -9,6 +9,7 @@ import { connectLoopback, createAuthenticatedRadioTransport, type RadioTransport
 import { previewRadioCodec, type RadioWireCodec } from './radioWire.js';
 import { playerCredentialSlot, provisionerFor, radioAgentCredentialSlot, requireCredential,
   type CredentialSlot, type CredentialTools } from './playerCredentials.js';
+import { ensureAdbClientIdentity, type AdbIdentity } from './adbIdentity.js';
 
 export { playerImageIds, findPlayerTarget, requirePlayerTarget, PlayerTargetError, usesPlayer, playerTargetProblem, type PlayerTarget } from './playerTargets.js';
 
@@ -240,6 +241,10 @@ export function inspectPlayerPhone(imageId: string) { return players.inspect(ima
 
 /** Provisions every configured image independently and reports each result on its own. */
 export async function initializePlayers(): Promise<void> {
+  const identity = await ensureAdbClientIdentity().catch((error): AdbIdentity =>
+    ({ source: 'EPHEMERAL', path: null, detail: error instanceof Error ? error.message : 'ADB client identity could not be resolved' }));
+  logger[identity.source === 'EPHEMERAL' ? 'warn' : 'info'](
+    { event: 'adb_identity', source: identity.source, reason: identity.detail }, 'ADB client identity');
   const registry = playerRegistry();
   for (const [imageId, problem] of registry.problems) {
     logger.warn({ event: 'duomove_setup', imageId, state: 'MISCONFIGURED', reason: problem }, 'DuoMove target requires attention');
