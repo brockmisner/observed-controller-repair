@@ -59,8 +59,10 @@ export type RunSummary = {
   warnings: string[];
 };
 
+/** WiGLE resets its daily query allowance at 00:00 US/Pacific, so the budget day is counted there. */
+const WIGLE_BUDGET_ZONE = "America/Los_Angeles";
 function dayKey(now: Date): string {
-  return now.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: WIGLE_BUDGET_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 
 /** Creates the job and its query units, or returns the existing job for this dataset revision. */

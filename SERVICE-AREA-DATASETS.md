@@ -41,10 +41,28 @@ which is what the engine already carries, so publishing a refresh cannot change 
 Only `COMPLETE` revisions are served; a revision under construction is never handed to a run. Cached
 tiles are frozen and keyed by revision, so phones share source observations without sharing state.
 
+## Source licensing, before any of this is used
+
+WiGLE's EULA grants use of its database "solely for your personal, research or educational,
+non-commercial purposes" and forbids copying or distributing the data "in its entirety or in any part for
+any commercial consideration". Commercial licensing exists in principle but is suspended, and WiGLE
+publishes no bulk export of other people's observations. Building a paid client's service area out of
+WiGLE search results is therefore outside that licence, whatever the request budget allows.
+
+The tooling here is source-agnostic: it ingests normalized observations, records the file or query cell
+behind each one, and keeps provenance per revision. Lawful sources for the same pipeline include
+observations you collected yourself with the WiGLE app (yours to keep, re-downloadable per upload),
+OpenCelliD's CC BY-SA bulk cell CSV, and commercially licensed on-premise datasets. Pick the source
+before planning an ingest.
+
 ## Resumable WiGLE ingest
 
-WiGLE returns 100 rows per page with a `searchAfter` cursor and enforces a daily query allowance. This
-project's own captures include the refusal: `{"success": false, "message": "too many queries today"}`.
+WiGLE returns 100 rows per page with a `searchAfter` cursor (`first` is not a supported paging parameter)
+and enforces a per-account daily query allowance that it deliberately does not publish; it is
+history-based and resets at 00:00 US/Pacific, which is the day boundary this ingest counts against. Over
+quota, the API answers HTTP 429 "Too many queries today" — this project's own captures include the JSON
+form, `{"success": false, "message": "too many queries today"}` — and a commercial token answers HTTP 402
+"Insufficient balance". Both pause an ingest and keep its progress.
 
 `npm run area -- fetch` splits the area into per-cell, per-kind query units, each with its own cursor,
 merges every page into the revision before the next request, and treats the daily-limit response as a
@@ -62,8 +80,9 @@ Ingest flags such responses rather than using them for capacity planning.
   a placeholder, and a missing frequency is derived from the channel only on the unambiguous 2.4/5 GHz
   channel plans, labelled as derived.
 - **Cellular** rows carry identity in the `PLMN_AREA_CELL` key, a channel number, and no frequency,
-  transmit power or antenna information. Identity is parsed from that key — never decoded out of the cell
-  number — and the RAT comes from `attributes`/`type`, because `gentype` is unreliable (an NR row arrived
+  transmit power or antenna information. The PLMN is MCC and MNC concatenated to six digits, and WiGLE
+  does not distinguish LAC from TAC, so the parsed area code holds whichever the source recorded.
+  Identity is parsed from that key — never decoded out of the cell number — and the RAT comes from `attributes`/`type`, because `gentype` is unreliable (an NR row arrived
   with `gentype: "WCDMA"`). LTE and NR frequencies are derived from EARFCN/NR-ARFCN through the fixed
   3GPP rasters. Path loss still has no source, so cells become model-usable only with an explicitly
   declared scenario (`--cellScenario`), and sector orientation remains an explicit unknown. GSM, WCDMA

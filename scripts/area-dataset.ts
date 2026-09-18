@@ -109,7 +109,9 @@ function wigleFetcher(tenantId: string) {
       longrange2: input.bbox.longrange2,
       ...(input.cursor ? { searchAfter: input.cursor } : {}),
     }, tenantId);
+    // 429 is the daily-allowance refusal; 402 is the commercial-token balance refusal. Both pause the job.
     if (response.status === 429) return { success: false, message: "too many queries today" };
+    if (response.status === 402) return { success: false, message: "insufficient balance for commercial query" };
     if (response.status < 200 || response.status >= 300) return { success: false, message: `WiGLE HTTP ${response.status}` };
     return response.data;
   };

@@ -12,8 +12,10 @@ import type { Position } from "../radio/schema.js";
  * Rules that follow from the real responses:
  * - `gentype` is unreliable (an NR row arrived with `gentype: "WCDMA"`), so the radio type is taken from
  *   `attributes`, then `type`, then `gentype`, and disagreements are counted.
- * - Cell identity is read from the underscore-separated WiGLE key (PLMN_AREA_CELL). Nothing is decoded
- *   out of the cell number itself.
+ * - Cell identity is read from the underscore-separated WiGLE key (PLMN_AREA_CELL), where the PLMN is
+ *   documented as MCC and MNC concatenated to six digits. Nothing is decoded out of the cell number.
+ *   WiGLE does not distinguish LAC from TAC: an LTE/NR tracking area occupies the same slot, so the
+ *   parsed area code carries whichever the source recorded.
  * - Cellular frequency is never present; it is derived from the channel number only through the fixed
  *   3GPP rasters and labelled as derived.
  * - `transid`, `qos`, `firsttime`, `lasttime` and `lastupdt` are preserved as provenance.
@@ -90,7 +92,9 @@ export function classifyResponse(value: unknown): ClassifiedResponse {
   if (!response) return empty;
   const message = text(response.message ?? response.error, 300);
   if (response.success === false) {
-    const rateLimited = /too many queries|rate limit|quota/i.test(message ?? "");
+    // "Too many queries today" is the documented daily-allowance refusal; "insufficient balance" is the
+    // commercial-token equivalent. Both mean "cannot query now", so both pause an ingest rather than fail it.
+    const rateLimited = /too many queries|rate limit|quota|insufficient balance/i.test(message ?? "");
     return { ...empty, kind: rateLimited ? "RATE_LIMITED" : "ERROR", message: message ?? "WiGLE reported a failed search" };
   }
   if (!Array.isArray(response.results)) return empty;
