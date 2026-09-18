@@ -8,7 +8,7 @@ export interface PlayerStatus {
   skipped_samples: number; max_lateness_ms: number; observer_mismatches: number;
   [key: string]: unknown;
 }
-export const terminal = (s: PlayerStatus) => ['COMPLETED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(s.state);
+export const terminal = (s: { state: string }) => ['COMPLETED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(s.state);
 export class PlayerSocket {
   private buffer = Buffer.alloc(0);
   private pending?: { id: string; resolve(s: PlayerStatus): void; reject(e: Error): void; timer: NodeJS.Timeout };

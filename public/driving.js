@@ -259,7 +259,7 @@
       text("drivingOrigin", coordinates(originPoint));
       text("drivingOriginSource", "Controller position");
       text("drivingConfig", configError || (!config ? "Loading driving settings..." : !configured ? "Routing is unavailable." :
-        current.imageId === config.playerImageId ? "Device-side 1 Hz playback · Estimated road timing · Synthetic location" : config.playbackMode === "REST_CHECKPOINTS" ? "Trip timing is an estimate. Playback waits for phone checks; continuous 1 Hz playback is not connected." : ""));
+        (config.playerImageIds || [config.playerImageId]).includes(current.imageId) ? "Device-side 1 Hz playback · Estimated road timing · Synthetic location" : config.playbackMode === "REST_CHECKPOINTS" ? "Trip timing is an estimate. Playback waits for phone checks; continuous 1 Hz playback is not connected." : ""));
       hidden("drivingConfig", Boolean(configured && !configError && config.playbackMode !== "REST_CHECKPOINTS"));
       hidden("drivingConfigRetry", !configError && config?.configured !== false);
       disabled("drivingConfigRetry", configPending);

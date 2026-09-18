@@ -48,7 +48,7 @@ import { haversineMeters } from "../geo/haversine.js";
 import { checkPhoneLocation } from "../ops/phoneLocationCheck.js";
 import { inventoryImportBackoff } from "../orchestrator/importBackoff.js";
 import { listLegacyRpaJobs, resolveLegacyRpaJob } from "../queue/rpaLifecycle.js";
-import { inspectPlayerPhone, playerImage } from "../trips/playerConnection.js";
+import { inspectPlayerPhone, usesPlayer } from "../trips/playerConnection.js";
 import { verifyPlayer } from "../ops/playerVerification.js";
 import { recordVerification, readVerificationRecord, VerificationJobs, VERIFICATION_EVENT } from "../ops/verificationHistory.js";
 
@@ -541,7 +541,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const result = await verificationJobs.run(phone, () => recordVerification(phone, () => verifyPlayer(phone.id, tenantId, {
         getDevice: (id, tenantId) => prisma.device.findFirst({ where: { id, tenantId } }),
         otherTenantHasImage: async (imageId, tenantId) => Boolean(await prisma.device.count({ where: { imageId, tenantId: { not: tenantId } } })),
-        configuredImage: playerImage, inspect: async () => ({ ...await inspectPlayerPhone(), verificationSource: 'ADB' }),
+        // Direct ADB verification is available only for this phone's own configured target.
+        configuredImage: () => usesPlayer(phone.imageId) ? phone.imageId : '',
+        inspect: async () => ({ ...await inspectPlayerPhone(phone.imageId), verificationSource: 'ADB' }),
         inspectViaProvider: inspectDevicePlayerApk,
       }), async record => {
         await prisma.$transaction(async tx => {
