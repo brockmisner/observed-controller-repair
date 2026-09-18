@@ -1,0 +1,44 @@
+{
+  "protocol": "duoplus.radio",
+  "protocolVersion": 1,
+  "messageType": "radio.result",
+  "messageId": "11111111-2222-4333-8444-000000000020",
+  "sentAtWallMs": 1789700000000,
+  "identity": {
+    "tenantId": "workspace-brock",
+    "imageId": "N5YK6",
+    "sessionId": "4f5b3d02-9a2f-4b70-8c31-0a4f0a2d51aa",
+    "bootId": "boot-2026-09-18T11:02:14Z-8812",
+    "datasetRevision": "city-boise:7"
+  },
+  "requestMessageId": "11111111-2222-4333-8444-000000000001",
+  "sequence": 47,
+  "frameHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "lifecycle": "REJECTED",
+  "duplicate": false,
+  "receivedAtBootMs": 918233,
+  "appliedAtBootMs": null,
+  "interfaces": {
+    "wifi": {
+      "outcome": "REJECTED",
+      "appliedCount": null,
+      "code": "IDENTITY_MISMATCH",
+      "message": "wrong session"
+    },
+    "cells": {
+      "outcome": "REJECTED",
+      "appliedCount": null,
+      "code": "IDENTITY_MISMATCH",
+      "message": "wrong session"
+    },
+    "bluetooth": {
+      "outcome": "REJECTED",
+      "appliedCount": null,
+      "code": "IDENTITY_MISMATCH",
+      "message": "wrong session"
+    }
+  },
+  "rejection": null,
+  "stateCertainty": "CERTAIN",
+  "rolledBack": false
+}
