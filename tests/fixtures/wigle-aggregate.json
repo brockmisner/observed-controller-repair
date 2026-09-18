@@ -1,0 +1,63 @@
+{
+  "success": true,
+  "source": "airgrid",
+  "origin": { "lat": 25.784025, "lng": -80.136606 },
+  "radiusKm": 1.5,
+  "results": [
+    {
+      "id": "wifi:AA:00:00:00:00:11:25.78402:-80.13660",
+      "kind": "wifi",
+      "netid": "AA:00:00:00:00:11",
+      "trilat": 25.784025,
+      "trilong": -80.136606,
+      "ssid": "Aggregate Net",
+      "encryption": "wpa2",
+      "channel": 40,
+      "frequency": 5200,
+      "qos": 7,
+      "firsttime": "2023-03-31T15:00:00.000Z",
+      "lasttime": "2026-03-28T16:00:00.000Z",
+      "lastupdt": "2026-03-28T22:00:00.000Z",
+      "type": "infra",
+      "transid": "20230331-00000",
+      "distanceKm": 0.0
+    },
+    {
+      "id": "cell:310260_33027_222912801:25.78410:-80.13650",
+      "kind": "cell",
+      "netid": "310260_33027_222912801",
+      "trilat": 25.7841,
+      "trilong": -80.1365,
+      "ssid": "T-Mobile USA",
+      "channel": 66786,
+      "qos": 6,
+      "firsttime": "2024-12-01T22:00:00.000Z",
+      "lasttime": "2026-05-05T11:00:00.000Z",
+      "lastupdt": "2026-05-06T11:00:00.000Z",
+      "type": "LTE",
+      "attributes": "LTE;310260",
+      "transid": "20241201-00000",
+      "gentype": "GSM",
+      "distanceKm": 0.12
+    },
+    {
+      "id": "bluetooth:d0:2e:ab:ef:1f:94:25.78400:-80.13655",
+      "kind": "bluetooth",
+      "netid": "d0:2e:ab:ef:1f:94",
+      "trilat": 25.784,
+      "trilong": -80.13655,
+      "ssid": "Sf0c206bf73977691C",
+      "name": "Sf0c206bf73977691C",
+      "qos": 2,
+      "firsttime": "2025-03-01T18:00:00.000Z",
+      "lasttime": "2025-08-13T09:00:00.000Z",
+      "lastupdt": "2026-08-20T03:00:00.000Z",
+      "type": "BLE",
+      "capabilities": ["Uncategorized", "10"],
+      "device": 0,
+      "mfgrId": 76,
+      "transid": "20250301-00000",
+      "distanceKm": 0.05
+    }
+  ]
+}
