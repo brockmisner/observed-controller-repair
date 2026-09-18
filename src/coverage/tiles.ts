@@ -11,6 +11,17 @@ export const MIN_TILE_ZOOM = 10;
 export const MAX_TILE_ZOOM = 18;
 const MAX_MERCATOR_LAT = 85.05112878;
 
+/**
+ * Cell observations are orders of magnitude sparser than Wi-Fi but are needed out to a 3 km radius, so
+ * they are stored on a coarser grid. Without this, a single window would have to enumerate hundreds of
+ * mostly empty cell tile keys.
+ */
+export const CELL_ZOOM_OFFSET = 3;
+
+export function zoomForKind(kind: "WIFI" | "CELL" | "BLUETOOTH", baseZoom: number): number {
+  return kind === "CELL" ? Math.max(MIN_TILE_ZOOM, baseZoom - CELL_ZOOM_OFFSET) : baseZoom;
+}
+
 export type TileRef = { zoom: number; x: number; y: number; key: string };
 export type TileBounds = { minLat: number; maxLat: number; minLng: number; maxLng: number };
 

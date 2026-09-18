@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { radioRecordSchema, recordKey, type RadioRecord } from "../src/radio/schema.js";
 import { haversineMeters } from "../src/geo/haversine.js";
 import { TileCache } from "../src/coverage/datasetCache.js";
-import { tileBounds, tileFor, tileIntersectsCircle, tilesWithin } from "../src/coverage/tiles.js";
+import { tileBounds, tileFor, tileIntersectsCircle, tilesWithin, zoomForKind } from "../src/coverage/tiles.js";
 import { loadWindow, MIN_TRAVEL_MARGIN_M, planWindow, windowRequestSchema, type TileReader } from "../src/coverage/window.js";
 import type { Kind } from "../src/coverage/inventory.js";
 
@@ -30,7 +30,7 @@ function cellAt(lat: number, lng: number, index: number): RadioRecord {
 function fakeReader(records: readonly RadioRecord[], options: { onRead?: (kind: Kind, keys: string[]) => void } = {}): TileReader {
   const tiles = new Map<string, RadioRecord[]>();
   for (const record of records) {
-    const key = `${record.kind}|${tileFor({ lat: record.lat, lng: record.lng }, zoom).key}`;
+    const key = `${record.kind}|${tileFor({ lat: record.lat, lng: record.lng }, zoomForKind(record.kind, zoom)).key}`;
     tiles.set(key, [...(tiles.get(key) ?? []), record]);
   }
   return {
@@ -81,6 +81,14 @@ test("a window keeps the engine's own radii and trades travel margin for the rec
   const dense = Array.from({ length: 5000 }, (_, index) => ({ record: wifiAt(center.lat, center.lng, index), distanceM: 10, kind: "WIFI" as const }));
   const impossible = planWindow(dense, windowRequestSchema.parse({ position: center, travelMarginM: 450, budget: 1000 }));
   assert.equal(impossible.status, "DENSITY_EXCEEDS_WINDOW");
+});
+
+test("cell observations are stored on a coarser grid than dense Wi-Fi", () => {
+  assert.equal(zoomForKind("WIFI", 15), 15);
+  assert.equal(zoomForKind("BLUETOOTH", 15), 15);
+  assert.equal(zoomForKind("CELL", 15), 12);
+  assert.ok(tilesWithin(center, 3450, zoomForKind("CELL", 15)).length < tilesWithin(center, 3450, 15).length / 5,
+    "a 3 km cell radius must not enumerate hundreds of empty dense-grid tiles");
 });
 
 test("loading a window reads only nearby tiles and returns a bounded, deduplicated record set", async () => {

@@ -8,7 +8,7 @@ import { resolvePin, prismaTileReader, tileMetadata, type AreaPin, type TileMeta
 import { carrierIdentity, eligibleCells, type CarrierIdentity, type EligibleCellSummary } from "./carrier.js";
 import { areaRelation, coverageForRecords, gapsFromSamples, radiiSchema, routeSamples, summarizeSamples, type CoverageGap, type SampleCoverage } from "./corridor.js";
 import { confidenceBreakdown, isRotatingBleIdentity, observationConfidence, type Observation } from "./observation.js";
-import { tileAreaKm2, tilesWithin } from "./tiles.js";
+import { tileAreaKm2, tileBounds, tilesWithin, zoomForKind } from "./tiles.js";
 import { ENGINE_OBSERVATION_LIMIT } from "./usability.js";
 import { loadWindow, MAX_SPEED_MPS, MIN_TRAVEL_MARGIN_M, windowRequestSchema, type WindowLoad } from "./window.js";
 
@@ -101,7 +101,8 @@ function median(values: number[]): number {
 
 /** Area-wide coverage from tile statistics only: bounded reads, no record payloads. */
 export function summarizeTiles(pin: AreaPin, tiles: readonly TileMetadata[], radii: { wifiM: number }, travelMarginM: number, budget: number): AreaTileSummary {
-  const footprint = tilesWithin(pin.area.center, pin.area.radiusM, pin.tileZoom);
+  const footprint = tilesWithin(pin.area.center, pin.area.radiusM, zoomForKind("WIFI", pin.tileZoom));
+  const cellFootprint = tilesWithin(pin.area.center, pin.area.radiusM, zoomForKind("CELL", pin.tileZoom));
   const byKind = { WIFI: 0, CELL: 0, BLUETOOTH: 0 } as Record<"WIFI" | "CELL" | "BLUETOOTH", number>;
   const wifiByKey = new Map<string, TileMetadata>();
   const cellKeys = new Set<string>();
@@ -120,10 +121,8 @@ export function summarizeTiles(pin: AreaPin, tiles: readonly TileMetadata[], rad
   let tilesWithoutCell = 0;
   for (const ref of footprint) {
     const wifi = wifiByKey.get(ref.key);
-    const center = {
-      lat: (wifi?.bounds.minLat ?? 0 + (wifi?.bounds.maxLat ?? 0)) / 2,
-      lng: (wifi?.bounds.minLng ?? 0 + (wifi?.bounds.maxLng ?? 0)) / 2,
-    };
+    const bounds = tileBounds(ref.zoom, ref.x, ref.y);
+    const center = { lat: (bounds.minLat + bounds.maxLat) / 2, lng: (bounds.minLng + bounds.maxLng) / 2 };
     if (!wifi) {
       tilesWithoutWifi++;
       if (holes.length < 100) holes.push({ tileKey: ref.key, center, reason: "No Wi-Fi observation stored for this tile" });
@@ -131,13 +130,15 @@ export function summarizeTiles(pin: AreaPin, tiles: readonly TileMetadata[], rad
       tilesWithoutUsableWifi++;
       if (holes.length < 100) holes.push({ tileKey: ref.key, center, reason: "Wi-Fi rows exist but none carry the fields the model requires" });
     }
+  }
+  for (const ref of cellFootprint) {
     if (!cellKeys.has(ref.key)) tilesWithoutCell++;
   }
   const wifiTiles = [...wifiByKey.values()];
   const densest = wifiTiles.reduce<TileMetadata | null>((best, tile) => !best || tile.recordCount > best.recordCount ? tile : best, null);
   const windowRadiusM = radii.wifiM + travelMarginM;
   const windowAreaKm2 = (Math.PI * windowRadiusM ** 2) / 1_000_000;
-  const densestPerKm2 = densest ? densest.recordCount / Math.max(0.001, tileAreaKm2(pin.tileZoom, densest.tileY)) : null;
+  const densestPerKm2 = densest ? densest.recordCount / Math.max(0.001, tileAreaKm2(zoomForKind("WIFI", pin.tileZoom), densest.tileY)) : null;
   const estimatedWindowRecords = densestPerKm2 === null ? null : Math.round(densestPerKm2 * windowAreaKm2);
   return {
     footprintTiles: footprint.length,
