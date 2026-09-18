@@ -42,6 +42,7 @@ function payload(payloadJson: string): Record<string, unknown> | null {
   try { return asObject(JSON.parse(payloadJson)); } catch { return null; }
 }
 
+/** Inspects a saved upload envelope without throwing when its JSON or expected fields are missing. */
 export function payloadShape(payloadJson: string): PayloadShape {
   const blank: PayloadShape = {
     parsed: false, version: null, storedRecords: 0, rawResponses: 0, rawRows: 0,
@@ -105,6 +106,7 @@ export function reimportRecords(payloadJson: string, options: { source: string; 
   return { records: normalization?.records ?? [], normalization: normalization ?? empty };
 }
 
+/** Reports which records and fields the current normalizers could recover from a saved upload. */
 export function auditReimport(payloadJson: string, options: { source: string; scenario?: CellScenario | null; now?: number }): ReimportAudit {
   const shape = payloadShape(payloadJson);
   const { records, normalization } = reimportRecords(payloadJson, options);

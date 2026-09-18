@@ -8,10 +8,7 @@ import { auditReimport, uploadAuditRequestSchema } from "../coverage/reimport.js
 import { uploadSummary } from "../ops/wigleUpload.js";
 import { HttpError } from "./errors.js";
 
-/**
- * Read-only dataset coverage endpoints. Nothing here starts a run, moves a phone, or writes radio state;
- * they exist so coverage gaps are visible before an acceptance run rather than discovered during one.
- */
+/** Reads a JSON request body up to 2 MB and rejects unsupported, oversized, or invalid input. */
 async function readJson(req: IncomingMessage) {
   if (!req.headers["content-type"]?.startsWith("application/json")) throw new HttpError(415, "JSON required");
   let size = 0;
@@ -28,6 +25,7 @@ async function readJson(req: IncomingMessage) {
   catch { throw new HttpError(400, "Invalid JSON"); }
 }
 
+/** Handles a coverage route and writes its JSON response, or returns false when the path is unrelated. */
 export async function handleCoverageRequest(req: IncomingMessage, res: ServerResponse, url: URL, tenantId?: string): Promise<boolean> {
   const path = url.pathname;
   if (!path.startsWith("/api/coverage")) return false;

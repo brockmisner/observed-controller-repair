@@ -327,6 +327,7 @@ export async function ingestSavedResponses(prisma: PrismaClient, input: {
   return { ...finalized, rows, stored, normalization: normalizationSummary, sources, warnings };
 }
 
+/** Returns workspace-scoped job details and aggregate progress for each kind and unit status. */
 export async function ingestStatus(prisma: PrismaClient, tenantId: string, jobId: string) {
   const job = await prisma.areaIngestJob.findFirst({ where: { id: jobId, tenantId } });
   if (!job) throw new HttpError(404, "Ingest job not found in this workspace");

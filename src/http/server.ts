@@ -235,6 +235,7 @@ async function snapshot(tenantId?: string) {
   };
 }
 
+/** Routes one HTTP request and translates expected failures into JSON error responses. */
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");

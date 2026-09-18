@@ -61,6 +61,7 @@ export function nrFrequencyMHz(arfcn: number): ChannelFrequency | null {
   return { frequencyMHz: Number(frequencyMHz.toFixed(3)), source: "DERIVED_NR_ARFCN", band: null };
 }
 
+/** Selects the appropriate cellular raster, preserving a missing channel as an unknown frequency. */
 export function channelFrequencyMHz(rat: "LTE" | "NR", channel: number | null | undefined): ChannelFrequency | null {
   if (channel === null || channel === undefined) return null;
   return rat === "LTE" ? eutraFrequencyMHz(channel) : nrFrequencyMHz(channel);

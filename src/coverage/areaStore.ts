@@ -200,6 +200,7 @@ export async function appendRecords(prisma: PrismaClient, revisionId: string, re
   return summary;
 }
 
+/** Adds validated provenance entries to a revision, replacing entries for the same file and hash. */
 export async function addSources(prisma: PrismaClient, revisionId: string, sources: IngestSource[]): Promise<void> {
   if (!sources.length) return;
   const revision = await prisma.areaDatasetRevision.findUniqueOrThrow({ where: { id: revisionId }, select: { sourcesJson: true } });
@@ -375,6 +376,7 @@ export async function tileMetadata(prisma: PrismaClient, revisionId: string): Pr
   });
 }
 
+/** Lists a workspace's service areas with their ten newest revisions and five newest ingest jobs. */
 export async function listAreas(prisma: PrismaClient, tenantId: string) {
   const datasets = await prisma.areaDataset.findMany({ where: { tenantId }, orderBy: { name: "asc" } });
   return Promise.all(datasets.map(async (dataset) => {

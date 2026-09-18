@@ -158,6 +158,7 @@ export function coverageAtPosition(input: {
   return { wifi, cell, bluetooth, observationAge: { medianDays: medianDays === null ? null : Math.round(medianDays), unknownDates } };
 }
 
+/** Builds a spatial index for a record set and reports its modeled coverage at one position. */
 export function coverageForRecords(input: {
   records: readonly RadioRecord[];
   position: Position;
@@ -194,6 +195,7 @@ export function routeSamples(route: readonly Position[], sampleSpacingM: number)
   return { samples, lengthM, spacingM, spacingAdjusted };
 }
 
+/** Groups consecutive route samples without usable interface coverage into per-interface gaps. */
 export function gapsFromSamples(samples: readonly SampleCoverage[]): CoverageGap[] {
   const build = (kind: CoverageGap["kind"], audible: (sample: SampleCoverage) => number): CoverageGap[] => {
     const gaps: CoverageGap[] = [];
@@ -218,6 +220,7 @@ export function gapsFromSamples(samples: readonly SampleCoverage[]): CoverageGap
   ];
 }
 
+/** Returns the route's minimum Wi-Fi and cell coverage and the number of uncovered samples. */
 export function summarizeSamples(samples: readonly SampleCoverage[]): CorridorReport["worst"] {
   return {
     wifiAudible: Math.min(...samples.map((sample) => sample.wifi.audible)),
@@ -227,6 +230,7 @@ export function summarizeSamples(samples: readonly SampleCoverage[]): CorridorRe
   };
 }
 
+/** Reports distance and containment for an area, or null fields when no area is supplied. */
 export function areaRelation(position: Position, area?: { center: Position; radiusM: number } | null): {
   distanceFromAreaCenterM: number | null;
   insideArea: boolean | null;
