@@ -1,0 +1,33 @@
+name: Observer Android toolchain
+on:
+  push:
+    branches: [observer-baseline-apk-20260919]
+    paths: [.github/workflows/observer-toolchain.yml]
+permissions:
+  contents: read
+jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Collect Android compile and signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          "$SM" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          mkdir -p bundle/platforms/android-35 bundle/build-tools bundle/platform-tools
+          cp "$SDK/platforms/android-35/android.jar" bundle/platforms/android-35/
+          cp -a "$SDK/build-tools/35.0.0" bundle/build-tools/
+          cp -a "$SDK/platform-tools/." bundle/platform-tools/
+          java -version 2> bundle/JAVA-VERSION.txt
+          "$SDK/build-tools/35.0.0/aapt2" version > bundle/AAPT-VERSION.txt
+          tar -czf observer-android-toolchain.tar.gz -C bundle .
+      - name: Store compile toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: observer-android-toolchain
+          path: observer-android-toolchain.tar.gz
+          retention-days: 3
+          if-no-files-found: error
