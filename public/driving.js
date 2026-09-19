@@ -83,10 +83,11 @@
         <button id="drivingPreview" type="submit" class="btn ghost driving-preview">${icon("route")} Preview route</button>
       </form>
       <div id="drivingFeedback" class="form-message" role="status" aria-live="polite"></div>
+      <button id="drivingRetry" type="button" class="btn ghost" data-driving-action="retry-operation" hidden>${icon("refresh-cw")} Retry</button>
       <div id="drivingPhoneStatus" hidden><dl class="environment-fields"><dt>Maps on phone</dt><dd id="drivingMapsStatus" role="status"></dd><dt>Phone GPS</dt><dd id="drivingGpsStatus" role="status"></dd></dl></div>
       <div id="drivingProviderReadiness" class="meta" role="status" hidden></div>
       <div id="drivingTripError" class="form-message error" role="status" aria-live="polite" hidden></div>
-      <div id="drivingActionBar" class="driving-actions" hidden><button id="drivingStart" type="button" class="btn" data-driving-action="start">${icon("play")} Drive</button><button id="drivingPause" type="button" class="btn ghost" data-driving-action="pause">${icon("pause")} Pause</button><button id="drivingResume" type="button" class="btn" data-driving-action="resume">${icon("play")} Resume</button><button id="drivingCancel" type="button" class="btn ghost" data-driving-action="cancel">${icon("x")} Cancel</button></div>
+      <div id="drivingActionBar" class="driving-actions" hidden><button id="drivingStart" type="button" class="btn" data-driving-action="start">${icon("play")} Drive</button><button id="drivingPause" type="button" class="btn ghost" data-driving-action="pause">${icon("pause")} Pause</button><button id="drivingResume" type="button" class="btn" data-driving-action="resume">${icon("refresh-cw")} Retry drive</button><button id="drivingCancel" type="button" class="btn ghost" data-driving-action="cancel">${icon("x")} Cancel</button></div>
       <div id="drivingTripProgress" hidden><div class="driving-progress"><progress id="drivingProgress" max="100" value="0" aria-label="Trip progress"></progress><span id="drivingProgressLabel"></span></div><div id="drivingProgressAccepted" class="meta"></div></div>
       <label id="drivingAlternativeField" class="driving-alternative" hidden>Route<select id="drivingAlternative" aria-label="Choose route alternative"></select></label>
       <section id="drivingTrip" class="driving-trip" hidden><div id="drivingTripSummary"></div><button id="drivingAdopt" type="button" class="btn ghost driving-preview" data-driving-action="adopt-anchor">${icon("map-pin")} Adopt destination as anchor</button></section>
@@ -147,6 +148,7 @@
       if (Object.hasOwn(patch, "address")) { value.addressSelection = null; value.addressResults = []; value.searchVersion += 1; value.searchError = ""; }
       Object.assign(value, patch);
       value.version += 1;
+      value.retryAction = null;
       value.error = "";
       value.message = value.trip ? "Trip settings changed. Preview the route again before starting." : "";
       value.arrival = null;
@@ -284,6 +286,8 @@
       value.waypoints.forEach((stop, index) => { for (const key of ["lat", "lng", "stopSeconds"]) field(`drivingStop${index}${key}`, stop[key]); });
       text("drivingFeedback", value.pending ? `${value.pending === "preview" ? "Preparing route" : "Updating trip"}...` : value.error || value.message || (value.picking ? "Choose the destination on the map." : ""));
       $("drivingFeedback")?.classList.toggle("error", Boolean(value.error));
+      hidden("drivingRetry", !value.retryAction);
+      disabled("drivingRetry", Boolean(value.pending || value.arrivalPending));
       hidden("drivingTrip", !trip);
       renderPhoneStatus(trip);
       const readiness = options.providerReadiness?.(current) || { label: "Readiness unknown", tone: "warn" };
@@ -354,6 +358,7 @@
         });
         body = { imageId: device.imageId, destination: destination(value), options: tripOptions(value), openMaps: value.openMaps, arrivalWifi: false, ...(waypoints.length ? { waypoints } : {}) };
       } catch (error) { value.error = error.message; render(); return; }
+      value.retryAction = null;
       value.pending = "preview"; value.error = ""; value.message = "";
       render();
       try {
@@ -362,7 +367,7 @@
         publish(device, value, result.trip);
         value.previewVersion = version;
         value.arrival = null;
-      } catch (error) { if (stillValid(device, value, stamp)) value.error = error.message; }
+      } catch (error) { if (stillValid(device, value, stamp)) { value.error = error.message; value.retryAction = "preview"; } }
       finally { if (stillValid(device, value, stamp)) { value.pending = ""; renderIfCurrent(device); } }
     }
 
@@ -376,6 +381,7 @@
       const allowed = { start: ["PREVIEW"], pause: ["RUNNING"], resume: ["PAUSED"], cancel: ["PREVIEW", "RUNNING", "PAUSED", "ARRIVING"], "adopt-anchor": ["ARRIVED"] };
       if (!allowed[name].includes(trip.status)) return;
       const stamp = generation;
+      value.retryAction = null;
       value.pending = name; value.error = ""; value.message = "";
       render();
       try {
@@ -383,8 +389,37 @@
         if (!stillValid(device, value, stamp)) return;
         publish(device, value, result.trip);
         if (name === "adopt-anchor") value.message = "Destination adopted as anchor. Device remains stationary.";
-      } catch (error) { if (stillValid(device, value, stamp)) value.error = error.message; }
+      } catch (error) { if (stillValid(device, value, stamp)) { value.error = error.message; value.retryAction = name; } }
       finally { if (stillValid(device, value, stamp)) { value.pending = ""; renderIfCurrent(device); } }
+    }
+
+    async function retryOperation() {
+      if (!current) return;
+      const device = current;
+      const value = stateFor(device);
+      const name = value.retryAction;
+      if (!name || value.pending || value.arrivalPending) return;
+      if (name === "preview") { await preview(); return; }
+      const tripId = value.trip?.id;
+      if (!tripId) return;
+      const stamp = generation;
+      value.pending = "retry"; value.error = ""; render();
+      let repeat = false;
+      try {
+        // A lost response may hide a successful command. Reconcile before repeating it.
+        const result = await api(`/api/trips/${encodeURIComponent(tripId)}`);
+        if (!stillValid(device, value, stamp) || value.trip?.id !== tripId) return;
+        publish(device, value, result.trip);
+        const allowed = { start: ["PREVIEW"], pause: ["RUNNING"], resume: ["PAUSED"], cancel: ["PREVIEW", "RUNNING", "PAUSED", "ARRIVING"], "adopt-anchor": [] };
+        repeat = (allowed[name] || []).includes(value.trip.status);
+        value.retryAction = null;
+        if (!repeat) value.message = `Trip is ${statusName(value.trip.status).toLowerCase()}. Status refreshed; no command repeated.`;
+      } catch (error) {
+        if (stillValid(device, value, stamp)) value.error = error.message;
+      } finally {
+        if (stillValid(device, value, stamp)) { value.pending = ""; renderIfCurrent(device); }
+      }
+      if (repeat && current?.id === device.id && stillValid(device, value, stamp)) await action(name);
     }
 
     async function arrivalAction(selection, enabled) {
@@ -551,6 +586,7 @@
       else if (name === "remove-stop") setDraft({ waypoints: value.waypoints.filter((_, index) => index !== Number(button.dataset.stopIndex)) });
       else if (name === "arrival-preview") arrivalAction();
       else if (name.startsWith("token-")) tokenAction(name, button.dataset.tokenId);
+      else if (name === "retry-operation") retryOperation();
       else if (name === "retry") { config = null; configError = ""; loadConfig(); }
       else action(name);
     });
