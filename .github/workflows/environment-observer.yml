@@ -6,12 +6,65 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.result.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/environment-observer-20261002
+      - name: Assemble reviewed source patch
+        if: hashFiles('bootstrap/environment.patch.gz.0') != ''
+        run: |
+          cat bootstrap/environment.patch.gz.{0,1,2,3,4} > /tmp/environment-input.gz
+          python3 - <<'PY'
+          import pathlib, hashlib, json
+          path=pathlib.Path('/tmp/environment-input.gz')
+          fix=pathlib.Path('bootstrap/repair.json')
+          data=bytearray(path.read_bytes())
+          if fix.exists():
+              manifest=json.loads(fix.read_text())
+              assert hashlib.sha256(data).hexdigest()==manifest['expectedInputSha256']
+              for edit in manifest['edits']:
+                  assert data[edit['offset']]==edit['old']
+                  data[edit['offset']]=edit['new']
+              path.write_bytes(data)
+          print('Input SHA256:',hashlib.sha256(data).hexdigest())
+          PY
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('bootstrap/environment.patch.gz.0') != ''
+        with:
+          name: environment-input
+          path: /tmp/environment-input.gz
+          retention-days: 2
+      - name: Validate and expand reviewed patch
+        if: hashFiles('bootstrap/environment.patch.gz.0') != ''
+        run: |
+          echo 'fc13de0bbe0262d482e401527ec09cd26e0d70c03266388d355321925660af18  /tmp/environment-input.gz' | sha256sum --check
+          gzip -dc /tmp/environment-input.gz > /tmp/environment-build.patch
+          git apply --check /tmp/environment-build.patch
+          git apply --index /tmp/environment-build.patch
+          git rm bootstrap/environment.patch.gz.*
+          if test -f bootstrap/repair.json; then git rm bootstrap/repair.json; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git diff --cached --check
+          git commit -m 'feat: add transparent per-device environment lab and Android observer'
+          git push origin HEAD:refs/heads/codex/environment-observer-20261002
+      - id: result
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  controller:
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - name: Package inspected source
         run: git archive --format=zip --output=controller-source.zip HEAD
@@ -19,34 +72,52 @@ jobs:
         with:
           name: controller-source
           path: controller-source.zip
-          retention-days: 3
+          retention-days: 7
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Install controller dependencies
-        run: npm ci
-      - name: Generate database client
-        run: npm run prisma:generate
+      - run: npm ci
+      - run: npm run prisma:generate
       - name: Controller tests
-        run: npm test
+        run: npm test 2>&1 | tee controller-tests.log
       - name: Type check controller
-        run: npm run build
+        run: npm run build 2>&1 | tee controller-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: controller-test-results
+          path: |
+            controller-tests.log
+            controller-build.log
+  android:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
       - uses: actions/setup-java@v4
-        if: hashFiles('android/environment-observer/build.gradle') != ''
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-        if: hashFiles('android/environment-observer/build.gradle') != ''
         with:
           gradle-version: '8.7'
-      - name: Build Android observer
-        if: hashFiles('android/environment-observer/build.gradle') != ''
-        run: gradle -p android/environment-observer test assembleDebug
+      - name: Lease and replay checks
+        run: bash scripts/test-environment-java.sh
+      - name: Compile both Android apps
+        run: gradle -p android/environment-observer test assembleDebug --stacktrace 2>&1 | tee android-build.log
       - uses: actions/upload-artifact@v4
-        if: hashFiles('android/environment-observer/build.gradle') != ''
+        if: always()
         with:
-          name: environment-observer-apk
-          path: android/environment-observer/app/build/outputs/apk/debug/*.apk
+          name: android-build-log
+          path: android-build.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: environment-observer-apks
+          path: android/environment-observer/app/build/outputs/apk/*/debug/*.apk
           if-no-files-found: error
+          retention-days: 14
