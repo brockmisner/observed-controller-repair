@@ -1,0 +1,14 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'net.stakeout.environment'
+    compileSdk 34
+    defaultConfig { applicationId 'net.stakeout.environment'; minSdk 29; targetSdk 34; versionCode 1; versionName '1.0.0' }
+    buildFeatures { buildConfig true }
+    flavorDimensions 'role'
+    productFlavors {
+        lab { dimension 'role'; applicationIdSuffix '.lab'; buildConfigField 'boolean', 'LAB_MODE', 'true' }
+        observer { dimension 'role'; applicationIdSuffix '.observer'; buildConfigField 'boolean', 'LAB_MODE', 'false' }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildTypes { debug { debuggable true }; release { minifyEnabled false } }
+}

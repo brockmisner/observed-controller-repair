@@ -1,0 +1,80 @@
+name: Environment observer
+on:
+  push:
+    branches: [codex/environment-observer-20261002]
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Package inspected source
+        run: git archive --format=zip --output=controller-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controller-source
+          path: controller-source.zip
+          retention-days: 7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate
+      - name: Controller tests
+        run: npm test 2>&1 | tee controller-tests.log
+      - name: Type check controller
+        run: npm run build 2>&1 | tee controller-build.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: controller-test-results
+          path: |
+            controller-tests.log
+            controller-build.log
+          retention-days: 14
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Lease and replay checks
+        run: bash scripts/test-environment-java.sh | tee android-lease-tests.log
+      - name: Compile both Android apps
+        run: gradle -p android/environment-observer test assembleDebug --stacktrace 2>&1 | tee android-build.log
+      - name: Android lint
+        run: gradle -p android/environment-observer lintLabDebug lintObserverDebug 2>&1 | tee android-lint.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-build-log
+          path: |
+            android-build.log
+            android-lint.log
+            android-lease-tests.log
+            android/environment-observer/app/build/reports/lint-results-*.txt
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: environment-observer-apks
+          path: android/environment-observer/app/build/outputs/apk/*/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

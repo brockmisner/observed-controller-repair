@@ -55,6 +55,12 @@ import { liveStatusFromRuntime } from "../radio/liveStatus.js";
 import { tripRadios } from "../radio/runtime.js";
 import { tripArrivalSnapshot } from "../radio/tripFeed.js";
 import { playerLifecycle } from "../trips/playerReadiness.js";
+import { createEnvironmentHandler } from "./environmentObserver.js";
+import { environmentStatus, captureEnvironment, startEnvironmentLab, stopEnvironmentLab } from "../radio/environmentService.js";
+const handleEnvironmentRequest=createEnvironmentHandler({
+  findDevice:(tenant,id)=>prisma.device.findFirst({where:{tenantId:tenant,OR:[{id},{imageId:id}]},select:{imageId:true,activeTripId:true}}),
+  status:environmentStatus,read:captureEnvironment,start:startEnvironmentLab,stop:stopEnvironmentLab,
+});
 
 const latitude = z.number().finite().min(-90).max(90);
 const longitude = z.number().finite().min(-180).max(180);
@@ -171,6 +177,7 @@ async function snapshot(tenantId?: string) {
       environment: environmentView(environment, device),
       locationTelemetry: locationRequests[0] ? serializeLocationRequest(locationRequests[0]) : null,
       trip,
+      environmentObservation: tenantId ? environmentStatus(tenantId,device.imageId) : null,
       radioLive: liveStatusFromRuntime({
         imageId: device.imageId,
         deviceId: device.id,
@@ -316,6 +323,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (await handleWarmupRequest(req, res, url, auth?.tenantId)) return;
     if (await handleSiteRequest(req, res, url, auth?.tenantId)) return;
     if (await handleTripRequest(req, res, url, auth?.tenantId)) return;
+    if (await handleEnvironmentRequest(req, res, url, auth?.tenantId)) return;
     if (config.authRequired && !auth && path !== "/health") {
       send(res, 401, { error: "unauthorized" });
       return;

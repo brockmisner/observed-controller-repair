@@ -3,11 +3,15 @@ import { z } from 'zod';
 import { bearingDegrees,clamp } from '../geo/haversine.js';
 import { radioRecordSchema,positionSchema,recordKey,type Position,type RadioRecord } from './schema.js';
 import { SpatialIndex } from './spatial.js';
+import { WifiVisibility } from './environmentPolicy.js';
 
 export const radioOptionsSchema=z.object({
   tenantId:z.string().min(1).max(200),imageId:z.string().min(1).max(200),sessionId:z.string().uuid(),
   datasetRevision:z.string().min(1).max(200),mcc:z.string().regex(/^\d{3}$/),mnc:z.string().regex(/^\d{2,3}$/),
   wifiRadiusM:z.number().min(1).max(1000).default(120),cellRadiusM:z.number().min(100).max(50000).default(3000),
+  // Defaults preserve the previous model; set entry/exit separately for calibrated scenarios.
+  wifiEntryDbm:z.number().min(-127).max(0).default(-90),wifiExitDbm:z.number().min(-127).max(0).default(-90),
+  wifiExitRadiusMultiplier:z.number().min(1).max(3).default(1),
   bluetoothRadiusM:z.number().min(1).max(1000).default(60),
   // Scenario cache intervals, not claims about Android's permission to request scans.
   wifiIntervalMs:z.number().int().min(1000).max(1800000).default(30000),
@@ -60,8 +64,10 @@ export class RadioEngine {
   private serving:string|null=null;
   private candidate:{key:string;since:number}|null=null;
   private seed:string;
+  private visibility:WifiVisibility;
   constructor(records:unknown,options:unknown) {
     this.options=Object.freeze(radioOptionsSchema.parse(options));
+    this.visibility=new WifiVisibility({entryDbm:this.options.wifiEntryDbm,exitDbm:this.options.wifiExitDbm,entryM:this.options.wifiRadiusM,exitM:this.options.wifiRadiusM*this.options.wifiExitRadiusMultiplier});
     const parsed=z.array(radioRecordSchema).max(10000).parse(records);
     if(new Set(parsed.map(recordKey)).size!==parsed.length)throw new Error('Duplicate radio identities');
     this.index=new SpatialIndex(parsed);
@@ -78,12 +84,15 @@ export class RadioEngine {
     const variation=(r:RadioRecord)=>fading(`${this.seed}:${recordKey(r)}`,elapsedMs);
     if(elapsedMs-this.wifiAt>=this.options.wifiIntervalMs) {
       this.wifi=[];this.wifiWarnings=[];this.wifiAt=elapsedMs;
-      for(const {record:r,distanceM} of this.index.within(position,this.options.wifiRadiusM)) {
+      const candidates=new Set<string>();
+      for(const {record:r,distanceM} of this.index.within(position,this.options.wifiRadiusM*this.options.wifiExitRadiusMultiplier)) {
         if(r.kind!=='WIFI')continue;
         if(!/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(r.identifier)||!r.ssid||!r.frequencyMHz){this.wifiWarnings.push(`WIFI_METADATA_MISSING:${r.identifier}`);continue;}
         const power=modeledPower(r,position,distanceM,r.frequencyMHz,variation(r));
-        if(power>=-90)this.wifi.push({bssid:r.identifier.toLowerCase(),ssid:r.ssid,frequencyMHz:r.frequencyMHz,rssiDbm:Math.round(clamp(power,-127,0)),sampleElapsedMs:elapsedMs});
+        candidates.add(r.identifier.toLowerCase());
+        if(this.visibility.update(r.identifier.toLowerCase(),power,distanceM))this.wifi.push({bssid:r.identifier.toLowerCase(),ssid:r.ssid,frequencyMHz:r.frequencyMHz,rssiDbm:Math.round(clamp(power,-127,0)),sampleElapsedMs:elapsedMs});
       }
+      this.visibility.retain(candidates);
       this.wifi.sort((a,b)=>b.rssiDbm-a.rssiDbm||a.bssid.localeCompare(b.bssid));
     }
     if(phase==='ARRIVED'&&(this.last?.bluetoothAction!=='REPLACE'||elapsedMs-this.bluetoothAt>=this.options.bluetoothIntervalMs)) {
