@@ -9,69 +9,12 @@ defaults:
   run:
     shell: bash
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    outputs:
-      sha: ${{ steps.result.outputs.sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: codex/environment-observer-20261002
-      - name: Apply reviewed Android compatibility fix
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          base=Path('android/environment-observer/app/src/main/java/net/stakeout/environment')
-          p=base/'BridgeService.java';s=p.read_text()
-          if 'Files.readString(' in s:
-              for name in ['environment-config.json','control-token']:
-                  old=f'Files.readString(new File(getFilesDir(),"{name}").toPath(),StandardCharsets.UTF_8)'
-                  new=f'new String(Files.readAllBytes(new File(getFilesDir(),"{name}").toPath()),StandardCharsets.UTF_8)'
-                  assert s.count(old)==1;s=s.replace(old,new)
-              p.write_text(s)
-              p=base/'MainActivity.java';s=p.read_text()
-              replacements=[
-                  ('Files.readString(new File(getFilesDir(),"environment-config.json").toPath())','new String(Files.readAllBytes(new File(getFilesDir(),"environment-config.json").toPath()),StandardCharsets.UTF_8)'),
-                  ('Files.writeString(new File(getFilesDir(),"control-token").toPath(),secret+"\\n",StandardCharsets.UTF_8)','Files.write(new File(getFilesDir(),"control-token").toPath(),(secret+"\\n").getBytes(StandardCharsets.UTF_8))'),
-                  ('Files.writeString(new File(getFilesDir(),"environment-config.json").toPath(),new JSONObject().put("imageId",id).toString(),StandardCharsets.UTF_8)','Files.write(new File(getFilesDir(),"environment-config.json").toPath(),new JSONObject().put("imageId",id).toString().getBytes(StandardCharsets.UTF_8))')]
-              for old,new in replacements:
-                  assert s.count(old)==1;s=s.replace(old,new)
-              p.write_text(s)
-          PY
-          cat > tests/environment-android-compat.test.ts <<'TS'
-          import test from 'node:test';
-          import assert from 'node:assert/strict';
-          import {readFileSync} from 'node:fs';
-          // The app's SDK floor is 29. Java 11 Files.readString/writeString are not
-          // available at that floor without core-library desugaring (not enabled here).
-          test('Android config I/O avoids Java APIs above the supported SDK floor',()=>{
-            for(const name of ['MainActivity','BridgeService']){
-              const source=readFileSync(`android/environment-observer/app/src/main/java/net/stakeout/environment/${name}.java`,'utf8');
-              assert.doesNotMatch(source,/Files\.(readString|writeString)\(/);
-            }
-          });
-          TS
-          git add android/environment-observer/app/src/main/java/net/stakeout/environment/BridgeService.java android/environment-observer/app/src/main/java/net/stakeout/environment/MainActivity.java tests/environment-android-compat.test.ts
-          if ! git diff --cached --quiet; then
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git diff --cached --check
-            git commit -m 'fix: use Android-compatible UTF-8 config I/O with regression check'
-            git push origin HEAD:refs/heads/codex/environment-observer-20261002
-          fi
-      - id: result
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   controller:
-    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - name: Package inspected source
         run: git archive --format=zip --output=controller-source.zip HEAD
@@ -97,14 +40,13 @@ jobs:
           path: |
             controller-tests.log
             controller-build.log
+          retention-days: 14
   android:
-    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - uses: actions/setup-java@v4
         with:
@@ -114,16 +56,21 @@ jobs:
         with:
           gradle-version: '8.7'
       - name: Lease and replay checks
-        run: bash scripts/test-environment-java.sh
+        run: bash scripts/test-environment-java.sh | tee android-lease-tests.log
       - name: Compile both Android apps
-        run: gradle -p android/environment-observer test assembleDebug lintDebug --stacktrace 2>&1 | tee android-build.log
+        run: gradle -p android/environment-observer test assembleDebug --stacktrace 2>&1 | tee android-build.log
+      - name: Android lint
+        run: gradle -p android/environment-observer lintLabDebug lintObserverDebug 2>&1 | tee android-lint.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: android-build-log
           path: |
             android-build.log
+            android-lint.log
+            android-lease-tests.log
             android/environment-observer/app/build/reports/lint-results-*.txt
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
         with:
