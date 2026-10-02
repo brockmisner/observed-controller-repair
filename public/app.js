@@ -680,6 +680,7 @@ function renderDetail() {
     <div class="meta">${escapeHtml(location.reason)}</div>
     <dl class="environment-fields"><dt>Model updated</dt><dd>${age(d.lastTickAt)}</dd><dt>Campaign remaining</dt><dd>${daysLeft(d.campaignEnd).toFixed(1)} days</dd></dl>
     ${gpsEvidenceHtml(d)}
+    <div id="environmentObserverStatus">${window.ObservatoryEnvironmentObserver?.markup(d.environmentObservation)||""}</div>
     <div id="radioLiveStatus">${window.ObservatoryRadioStatus?.markup(d.radioLive) || ""}</div>
     <div class="section-heading"><h3>Legacy automation</h3><button type="button" class="btn ghost" id="manageRpaJobs">Review jobs</button></div>
     <div class="section-heading"><h3>Source boundaries</h3></div><dl class="environment-fields"><dt>WiGLE</dt><dd>Historical observations</dd><dt>SIM / cell / Bluetooth</dt><dd>Local metadata; not verified on device</dd><dt>Network / DNS</dt><dd>Not verified</dd></dl>
@@ -2483,3 +2484,20 @@ setInterval(() => {
   }
 }, 1000);
 setMobileView(document.body.dataset.view || "fleet");
+
+// Actions capture the selected device and session before awaiting the network.
+const environmentActionsPending=new Set();
+document.addEventListener('click',async event=>{
+  const button=event.target.closest?.('[data-environment-action]');if(!button)return;
+  const device=state.snapshot?.devices?.find(d=>d.id===state.selectedId);
+  if(!device)return;
+  const action=button.dataset.environmentAction,operation=device.id+':'+action;
+  if(environmentActionsPending.has(operation))return;
+  const sessionVersion=state.sessionVersion;environmentActionsPending.add(operation);button.disabled=true;
+  try{
+    formMessage('environmentObserverFeedback','Contacting the selected phone…');
+    await api('/api/environment-observer/devices/'+encodeURIComponent(device.id)+'/'+action,{method:'POST',body:'{}'});
+    if(sessionVersion===state.sessionVersion){await load();if(state.selectedId===device.id)formMessage('environmentObserverFeedback',action==='readback'?'Android observation captured.':'Test playback request completed; Android radios unchanged.');}
+  }catch(error){if(sessionVersion===state.sessionVersion&&state.selectedId===device.id)formMessage('environmentObserverFeedback',error.message,true);}
+  finally{environmentActionsPending.delete(operation);button.disabled=false;}
+});
