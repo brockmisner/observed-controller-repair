@@ -21,7 +21,7 @@ public final class MainActivity extends Activity {
     TextView detail=new TextView(this);detail.setText(BuildConfig.LAB_MODE?"Application test state only. This app does not modify Android Wi-Fi, cellular, Bluetooth or mock-location flags.":"Independent Android API readback. Cached sample timestamps and mock-location flags are preserved. Scans run only when requested.");root.addView(detail);
     image=new EditText(this);image.setHint("DuoPlus image ID");image.setSingleLine(true);root.addView(image);
     key=new EditText(this);key.setHint("64-character per-device key (leave blank to keep)");key.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);key.setSingleLine(true);root.addView(key);
-    try{JSONObject c=new JSONObject(Files.readString(new File(getFilesDir(),"environment-config.json").toPath()));image.setText(c.getString("imageId"));}catch(Exception ignored){}
+    try{JSONObject c=new JSONObject(new String(Files.readAllBytes(new File(getFilesDir(),"environment-config.json").toPath()),StandardCharsets.UTF_8));image.setText(c.getString("imageId"));}catch(Exception ignored){}
     button(root,"Save configuration",()->save());
     if(!BuildConfig.LAB_MODE)button(root,"Grant observation permissions",()->permissions());
     button(root,"Start receiver",()->{if(!BuildConfig.LAB_MODE&&checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){permissions();return;}try{startForegroundService(new Intent(this,BridgeService.class));}catch(RuntimeException e){toast("Unable to start. Check permissions.");}});
@@ -35,8 +35,8 @@ public final class MainActivity extends Activity {
     String id=image.getText().toString().trim(),secret=key.getText().toString().trim();if(!id.matches("[A-Za-z0-9_.:-]{1,200}"))throw new IllegalArgumentException();
     if(!secret.isEmpty())Wire.unhex(secret);else if(!new File(getFilesDir(),"control-token").isFile()){toast("A per-device key is required.");return;}
     stopService(new Intent(this,BridgeService.class));
-    if(!secret.isEmpty())Files.writeString(new File(getFilesDir(),"control-token").toPath(),secret+"\n",StandardCharsets.UTF_8);
-    Files.writeString(new File(getFilesDir(),"environment-config.json").toPath(),new JSONObject().put("imageId",id).toString(),StandardCharsets.UTF_8);key.setText("");toast("Saved. Start the receiver explicitly.");
+    if(!secret.isEmpty())Files.write(new File(getFilesDir(),"control-token").toPath(),(secret+"\n").getBytes(StandardCharsets.UTF_8));
+    Files.write(new File(getFilesDir(),"environment-config.json").toPath(),new JSONObject().put("imageId",id).toString().getBytes(StandardCharsets.UTF_8));key.setText("");toast("Saved. Start the receiver explicitly.");
   }catch(Exception e){toast("Invalid image ID or key; configuration was not saved.");}}
   private void permissions(){List<String> required=new ArrayList<>(Arrays.asList(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.READ_PHONE_STATE));if(Build.VERSION.SDK_INT>=31){required.add(Manifest.permission.BLUETOOTH_SCAN);required.add(Manifest.permission.BLUETOOTH_CONNECT);}if(Build.VERSION.SDK_INT>=33)required.add(Manifest.permission.POST_NOTIFICATIONS);requestPermissions(required.toArray(new String[0]),42);}
   @Override public void onResume(){super.onResume();handler.post(refresh);}

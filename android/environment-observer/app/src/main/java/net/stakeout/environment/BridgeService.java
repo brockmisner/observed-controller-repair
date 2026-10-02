@@ -38,9 +38,9 @@ public final class BridgeService extends Service {
   @Override public int onStartCommand(Intent intent,int flags,int startId){
     if(running){if(intent!=null&&SCAN.equals(intent.getAction())&&observer!=null)observer.requestScans();return START_NOT_STICKY;}
     try{
-      JSONObject config=new JSONObject(Files.readString(new File(getFilesDir(),"environment-config.json").toPath(),StandardCharsets.UTF_8));
+      JSONObject config=new JSONObject(new String(Files.readAllBytes(new File(getFilesDir(),"environment-config.json").toPath()),StandardCharsets.UTF_8));
       Wire.fields(config,"imageId");image=Wire.string(config,"imageId",200);if(!image.matches("[A-Za-z0-9_.:-]{1,200}"))throw new IllegalArgumentException("INVALID_IMAGE");
-      key=Files.readString(new File(getFilesDir(),"control-token").toPath(),StandardCharsets.UTF_8).trim();Wire.unhex(key);
+      key=new String(Files.readAllBytes(new File(getFilesDir(),"control-token").toPath()),StandardCharsets.UTF_8).trim();Wire.unhex(key);
       bootCount=Settings.Global.getInt(getContentResolver(),Settings.Global.BOOT_COUNT,-1);if(bootCount<0)throw new IllegalArgumentException("BOOT_COUNT_UNAVAILABLE");
       boot=UUID.nameUUIDFromBytes((image+":"+bootCount).getBytes(StandardCharsets.UTF_8)).toString();instance=UUID.randomUUID().toString();
       NotificationManager manager=getSystemService(NotificationManager.class);manager.createNotificationChannel(new NotificationChannel("environment","Environment testing",NotificationManager.IMPORTANCE_LOW));
