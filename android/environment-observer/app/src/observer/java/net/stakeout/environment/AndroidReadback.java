@@ -41,7 +41,7 @@ final class AndroidReadback implements AutoCloseable {
     IntentFilter f=new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION);
     if(Build.VERSION.SDK_INT>=33)c.registerReceiver(wifiReceiver,f,Context.RECEIVER_NOT_EXPORTED);else c.registerReceiver(wifiReceiver,f);
     handler.post(()->{if(locations!=null&&permitted(Manifest.permission.ACCESS_FINE_LOCATION))for(String p:new String[]{LocationManager.GPS_PROVIDER,LocationManager.NETWORK_PROVIDER}){
-      try{if(locations.getAllProviders().contains(p))locations.requestLocationUpdates(p,1000,0,listener,Looper.getMainLooper());}catch(RuntimeException ignored){}
+      try{if(locations.getAllProviders().contains(p))locations.requestLocationUpdates(p,1000,0,listener,Looper.getMainLooper());}catch(SecurityException ignored){}catch(RuntimeException ignored){}
     }});
   }
   private boolean permitted(String p){return context.checkSelfPermission(p)==PackageManager.PERMISSION_GRANTED;}
@@ -150,6 +150,6 @@ final class AndroidReadback implements AutoCloseable {
       synchronized(ble){bleActive=true;}scanner.startScan(callback);handler.postDelayed(this::stopScan,5000);
     }catch(SecurityException e){synchronized(ble){bleError="PERMISSION_DENIED";bleActive=false;}}catch(RuntimeException e){synchronized(ble){bleError="SCAN_FAILED";bleActive=false;}}
   });}
-  private void stopScan(){try{if(scanner!=null)scanner.stopScan(callback);}catch(RuntimeException ignored){}synchronized(ble){bleActive=false;bleComplete=true;}}
+  private void stopScan(){try{if(scanner!=null)scanner.stopScan(callback);}catch(SecurityException ignored){}catch(RuntimeException ignored){}synchronized(ble){bleActive=false;bleComplete=true;}}
   public void close(){handler.removeCallbacksAndMessages(null);stopScan();try{if(locations!=null)locations.removeUpdates(listener);}catch(RuntimeException ignored){}try{context.unregisterReceiver(wifiReceiver);}catch(RuntimeException ignored){}}
 }
