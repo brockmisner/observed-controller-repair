@@ -1,0 +1,52 @@
+name: Environment observer
+on:
+  push:
+    branches: [codex/environment-observer-20261002]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Package inspected source
+        run: git archive --format=zip --output=controller-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controller-source
+          path: controller-source.zip
+          retention-days: 3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install controller dependencies
+        run: npm ci
+      - name: Generate database client
+        run: npm run prisma:generate
+      - name: Controller tests
+        run: npm test
+      - name: Type check controller
+        run: npm run build
+      - uses: actions/setup-java@v4
+        if: hashFiles('android/environment-observer/build.gradle') != ''
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        if: hashFiles('android/environment-observer/build.gradle') != ''
+        with:
+          gradle-version: '8.7'
+      - name: Build Android observer
+        if: hashFiles('android/environment-observer/build.gradle') != ''
+        run: gradle -p android/environment-observer test assembleDebug
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('android/environment-observer/build.gradle') != ''
+        with:
+          name: environment-observer-apk
+          path: android/environment-observer/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
